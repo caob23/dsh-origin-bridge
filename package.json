@@ -21,6 +21,7 @@
     "origin-bridge": "bin/origin-bridge.mjs"
   },
   "exports": {
+    ".": "./index.js",
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json"
   },
