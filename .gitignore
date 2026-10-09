@@ -1,0 +1,13 @@
+.venv/
+venv/
+node_modules/
+__pycache__/
+*.pyc
+.pytest_cache/
+out/
+edge/
+*.log
+npm-*.tgz
+package-lock.json
+fixtures/synthetic_*.bin
+fixtures/not_a_bin.bin

@@ -1,0 +1,70 @@
+{
+  "name": "dsh-origin-bridge",
+  "version": "0.4.0",
+  "description": "Drive local Origin/OriginPro from chat: import .dat/.csv/Excel/workstation .bin data, plot, fit, and save editable .opju projects. Third-party tool, not affiliated with or endorsed by OriginLab Corporation.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/caob23/dsh-origin-bridge.git"
+  },
+  "bugs": {
+    "url": "https://github.com/caob23/dsh-origin-bridge/issues"
+  },
+  "homepage": "https://github.com/caob23/dsh-origin-bridge#readme",
+  "main": "./index.js",
+  "icon": "./icon.svg",
+  "dependencies": {
+    "@deepseek-ai/dsh-mcp-client": ">=0.1.0-rc.1"
+  },
+  "bin": {
+    "origin-bridge": "./bin/origin-bridge.mjs"
+  },
+  "exports": {
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "bin/origin-bridge.mjs",
+    "install_dsh.ps1",
+    "cordis.patch.yml",
+    "icon.svg",
+    "locale/en.json",
+    "locale/zh.json",
+    "docs/preview.png",
+    "scripts/make_icon.py",
+    "server.py",
+    "originlab.py",
+    "asciiio.py",
+    "binio.py",
+    "templates_catalog.py",
+    "fixtures/",
+    "smoke_test.py",
+    "edge_checks.py",
+    "test_asciiio.py",
+    "test_binio.py",
+    "client_check.py",
+    "requirements.txt",
+    "sample.dat",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "dsh-bundle",
+    "deepseek-harness",
+    "mcp",
+    "origin",
+    "originpro",
+    "opju",
+    "scientific-plotting",
+    "electrochemistry"
+  ]
+}

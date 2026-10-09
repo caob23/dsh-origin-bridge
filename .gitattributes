@@ -1,0 +1,17 @@
+*.ps1 text eol=crlf
+*.py text eol=lf
+*.mjs text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
+*.svg text eol=lf
+*.dat text
+*.csv text
+*.txt text
+*.png binary
+*.emf binary
+*.tif binary
+*.pdf binary
+*.bin binary
+*.opju binary

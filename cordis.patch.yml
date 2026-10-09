@@ -1,0 +1,45 @@
+# dsh-origin-bridge — DeepSeek Harness bundle patch
+#
+# Registers server.py as a native dsh tool provider through the MCP client
+# loader that ships inside the dsh app package (@deepseek-ai/dsh-mcp-client).
+#
+# IMPORTANT — new entries must use `insert:`.
+# A top-level `- id: <new id>` block is an *override* of an entry that already
+# exists in a lower layer; for a brand-new id dsh silently ignores it, which
+# looks exactly like "I edited the config and nothing happened".
+#
+# serverName must be an identifier: tools are exposed as
+# mcp__<serverName>__<tool>, so a hyphen here would produce an unaddressable
+# tool name.
+#
+# Path resolution:
+#   market install -> <DSH_HOME>/profiles/<profile>/node_modules/dsh-origin-bridge
+#   manual install -> set ORIGIN_BRIDGE_HOME to the folder holding server.py
+#   interpreter    -> set ORIGIN_BRIDGE_PYTHON to your venv python.exe
+#
+# failOnStartupError: false keeps dsh bootable when Origin is missing or a modal
+# dialog stalls the COM server; the tools just do not register that session.
+
+- insert:
+    - id: mcp-origin-bridge
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: origin_bridge
+        transport: stdio
+        command: !!js (process.env.ORIGIN_BRIDGE_PYTHON || 'python')
+        args:
+          - '-u'
+          - '-X'
+          - utf8
+          - !!js (process.env.ORIGIN_BRIDGE_HOME || (String(process.env.DSH_HOME || (String(process.env.USERPROFILE) + '/.dsh')) + '/profiles/desktop/node_modules/dsh-origin-bridge')) + '/server.py'
+        env:
+          PYTHONIOENCODING: utf-8
+          PYTHONUNBUFFERED: '1'
+        failOnStartupError: false
+        toolCallTimeoutMs: 180000
+    # Self-mount. dsh's plugin market decides "live / restart pending" by looking
+    # for this bundle's package name among the loaded entry names. Without this
+    # row the only entry name is @deepseek-ai/dsh-mcp-client, so the market shows
+    # "restart to apply" forever even after a restart. index.js apply() is a no-op.
+    - id: dsh-origin-bridge
+      name: dsh-origin-bridge

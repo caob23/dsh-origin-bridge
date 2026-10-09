@@ -1,0 +1,7 @@
+// instrument: UV-8000
+! legacy banner
+# run 2026-10-08
+X	Y
+1.0	1.0
+2.0	2.0
+3.0	3.0
