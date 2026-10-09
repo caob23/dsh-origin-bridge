@@ -18,7 +18,7 @@
     "@deepseek-ai/dsh-mcp-client": ">=0.1.0-rc.1"
   },
   "bin": {
-    "origin-bridge": "./bin/origin-bridge.mjs"
+    "origin-bridge": "bin/origin-bridge.mjs"
   },
   "exports": {
     "./package.json": "./package.json",
@@ -39,7 +39,10 @@
     "asciiio.py",
     "binio.py",
     "templates_catalog.py",
-    "fixtures/",
+    "fixtures/make_fixtures.py",
+    "fixtures/*.dat",
+    "fixtures/*.csv",
+    "fixtures/*.txt",
     "smoke_test.py",
     "edge_checks.py",
     "test_asciiio.py",
