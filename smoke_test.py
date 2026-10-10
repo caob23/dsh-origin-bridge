@@ -7,6 +7,7 @@ Exits non-zero on the first hard failure. Writes artifacts to ./out/.
 """
 
 import json
+import math
 import os
 import subprocess
 import sys
@@ -309,15 +310,22 @@ def main():
                                          "data": os.path.join(HERE, "sample.dat")})
     check("chart_check reads columns from the file", pv.get("ok") and
           pv.get("columns_detected") == ["X", "Y"], (pv.get("columns_detected"), pv.get("issues")))
-    cr = rpc.tool("origin_chart_render", {"name": preset_name,
-                                          "source": os.path.join(HERE, "sample.dat"),
-                                          "x": 1, "y": 2, "output_dir": OUT})
+    xrd = {"two_theta": [round(20 + i * 1.5, 2) for i in range(12)],
+           "intensity": [round(120 + 900 * math.exp(-((i - 5) ** 2) / 3.0)) for i in range(12)]}
+    cr = rpc.tool("origin_chart_render", {"name": preset_name, "columns": xrd,
+                                          "output_dir": OUT})
     check("chart_render delivers image+opju", cr.get("ok") and
           bool((cr.get("delivered") or {}).get("image")) and bool((cr.get("delivered") or {}).get("project")),
           (cr.get("delivered"), cr.get("code"), cr.get("message")))
     check("chart_render applied the preset titles",
           (cr.get("preset") or {}).get("x_title") and (cr.get("preset") or {}).get("y_title"),
           cr.get("preset"))
+    bad = rpc.tool("origin_chart_render", {"name": preset_name,
+                                           "source": os.path.join(HERE, "sample.dat"),
+                                           "x": 1, "y": 2, "output_dir": OUT})
+    check("chart_render refuses data missing the preset's columns",
+          not bad.get("ok") and bad.get("code") == "preset_columns_mismatch",
+          (bad.get("code"), bad.get("message")))
 
     gp = rpc.tool("origin_fit", {"worksheet": ws, "x": 1, "y": 2, "kind": "gauss"})
     check("fit preset resolves to an installed function", gp.get("ok") and gp.get("func") == "Gauss",

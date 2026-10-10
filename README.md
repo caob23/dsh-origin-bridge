@@ -31,7 +31,7 @@
 - **数据不出本机。** 没有 API key、没有云端组件，dsh 拉起一个本地 Python 进程，通过 OriginLab 官方的 [`originpro`](https://pypi.org/project/originpro/) 驱动你机器上的 Origin。
 - **每一步都有证据。** Origin 的 X-Function 普遍"返回成功但什么都没发生"。这里画图后读回轴范围与数据跨度比对，导出后校验文件存在/体积/文件头魔数，样式逐项读回——读不回的进 `failed` 列表，不会假装成功。
 - **不是 74 个工具，是 27 个。** 每个都有实测用途，工具描述里写着实测限制，模型不会踩坑。
-- **不是玩具。** 231–237 项自动化测试（本机带真实工作站 .bin 样本时 237）覆盖协议滥用、边界条件、坏句柄、真实数据文件；originpro 的十几个文档陷阱全部记录在案并绕开。
+- **不是玩具。** **1079 例全链路题库**（27 个工具，最少 15 例/工具，最多 134 例/工具）跑的是真实 stdio 服务器 + 本机 OriginPro，按副作用分五层：L0 纯解析 273 例、L1 只读 COM 61 例、L2 改会话 512 例、L3 落盘 155 例、L4 进程级 78 例；提示词按人话写，跑之前先用在线 `tools/list` schema 校验用例本身，避免把题库的笔误当成产品 bug。题库与模拟数据是开发侧资产，**不随包发布**；随包发布的是 214 项离线/单元与边界检查（asciiio 24、binio 30、lifecycle 37、smoke 97、edge 26），你可以直接复跑。originpro 的十几个文档陷阱全部记录在案并绕开。
 
 ## 它能做什么
 
@@ -106,12 +106,14 @@ pip install -r requirements.txt      # 国内网络慢就加 -i https://pypi.tun
 先确认能独立跑通（会自己拉起 Origin）：
 
 ```powershell
-.\.venv\Scripts\python.exe smoke_test.py     # 97 项，看到 ALL GOOD 才算过
-.\.venv\Scripts\python.exe edge_checks.py    # 26 项边界
-.\.venv\Scripts\python.exe test_asciiio.py   # 24 项，不需要 Origin
-.\.venv\Scripts\python.exe test_binio.py     # 24 项起，不需要 Origin；有真实 .bin 时会跟厂商 .txt 逐点对账
-.\.venv\Scripts\python.exe test_lifecycle.py # 20 项，不需要 Origin：实例分类/回收的安全边界
+.\.venv\Scripts\python.exe smoke_test.py              # 97 项，看到 ALL GOOD 才算过
+.\.venv\Scripts\python.exe edge_checks.py             # 26 项边界
+.\.venv\Scripts\python.exe test_asciiio.py            # 24 项，不需要 Origin
+.\.venv\Scripts\python.exe test_binio.py              # 30 项，不需要 Origin；有真实 .bin 时会跟厂商 .txt 逐点对账
+.\.venv\Scripts\python.exe test_lifecycle.py          # 37 项，不需要 Origin：实例分类/回收/掉线重连的安全边界
 ```
+
+上面这 214 项随包发布，你可以自己复跑。另外那 **1079 例全链路题库是开发侧资产**（`cases/` + `run_cases.py`），跑的是真实 stdio 服务器 + 本机 Origin，用它的提示词和你的原始数据都不适合公开，所以没有进仓库、也没有进 npm 包；本文里的覆盖数字都来自它的实际运行结果。
 
 ### 不是 dsh，是别的 MCP 客户端
 
@@ -283,8 +285,10 @@ dsh-origin-bridge/
 ├── icon.svg             # 卡片图标（scripts/make_icon.py 生成）
 ├── locale/*.json        # dsh 卡片显示名与描述
 ├── scripts/make_preview.py # 重新生成 docs/preview.png（关掉图例后才导出）
-└── test_*.py / smoke_test.py / edge_checks.py   # 231–237 项测试
+└── test_*.py / smoke_test.py / edge_checks.py   # 214 项离线与单元检查（随包发布）
 ```
+
+开发侧另有 `cases/` + `run_cases.py` 的 1079 例全链路题库和 `render_realdata.py` 的真实数据逐文件出图脚本，两者都不随包发布（见上文）。
 
 重新生成图标：`python scripts/make_icon.py`（只需要 numpy，PNG 由 stdlib 手写）。
 

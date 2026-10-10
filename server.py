@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import originlab  # noqa: E402
 
 SERVER_NAME = "origin-bridge"
-SERVER_VERSION = "0.4.2"
+SERVER_VERSION = "0.4.3"
 PROTOCOL = "2024-11-05"
 
 

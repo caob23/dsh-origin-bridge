@@ -14,3 +14,8 @@ fixtures/not_a_bin.bin
 
 # 用户自己的工作站导出数据，只在本地当真题用，不进仓库
 cases/realdata/
+
+# 题库与跑题脚本是本地开发资产，不随插件发布
+/cases/
+/run_cases.py
+/render_realdata.py
