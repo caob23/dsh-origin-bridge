@@ -1438,7 +1438,10 @@ def export(graph, path="", fmt="png", width=1600):
         if page is None:
             raise OriginError("graph_not_found", "找不到图页：%s（项目里可能还没有图）" % (graph or ""))
         name = _safe(lambda: page.name, "Graph1")
-        target_path = os.path.abspath(path or os.path.join(os.getcwd(), "%s.%s" % (name, fmt)))
+        # No path is not an invitation to write into the process CWD: under dsh
+        # that is the plugin's node_modules folder. Origin's User Files wins.
+        folder = _safe(lambda: op.path("u"), "") or os.getcwd()
+        target_path = os.path.abspath(path or os.path.join(folder, "%s.%s" % (name, fmt)))
         if os.path.splitext(target_path)[1].lower().lstrip(".") != fmt:
             target_path = os.path.splitext(target_path)[0] + "." + fmt
         os.makedirs(os.path.dirname(target_path) or ".", exist_ok=True)
