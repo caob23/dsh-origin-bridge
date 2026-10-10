@@ -3,7 +3,7 @@
 Why not just originpro's from_file: Origin's ASCII import is fussy about
 multi-row headers, '#'/'//' comment lines and space-aligned columns, and it
 fails by producing an empty sheet rather than an error. Why not the original
-optima-plot read_dat: it splits on TAB only, so space- or comma-aligned .dat
+the old read_dat: it splits on TAB only, so space- or comma-aligned .dat
 files silently turn into a single NaN column.
 
 This reader sniffs the delimiter, handles BOM and GBK, skips comment lines, and

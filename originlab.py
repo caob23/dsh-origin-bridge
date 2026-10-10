@@ -891,7 +891,7 @@ def view(graph, width=900):
             raise OriginError("graph_not_found", "没有可预览的图页；先 origin_inspect 看页面")
         # Unique name: a fixed path would let two dsh sessions overwrite each
         # other's preview mid-read.
-        fd, tmp = tempfile.mkstemp(prefix="optima_plot_view_", suffix=".png")
+        fd, tmp = tempfile.mkstemp(prefix="origin_bridge_view_", suffix=".png")
         os.close(fd)
         os.remove(tmp)
         # save_fig rejects a type that disagrees with the extension, and its
@@ -1097,7 +1097,7 @@ def _save_project(path=""):
             # Never default to the process CWD: under dsh that is the plugin's
             # node_modules folder, so an unnamed save would litter the install.
             target = os.path.join(_safe(lambda: op.path("u"), "") or os.getcwd(),
-                                  time.strftime("optima_plot_%Y%m%d_%H%M%S.opju"))
+                                  time.strftime("origin_bridge_%Y%m%d_%H%M%S.opju"))
         if not target.lower().endswith((".opju", ".opj")):
             target += ".opju"
         os.makedirs(os.path.dirname(target) or ".", exist_ok=True)

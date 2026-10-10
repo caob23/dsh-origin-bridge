@@ -241,7 +241,7 @@ def main():
           lyr.get("layer_name_from_origin"))
     check("add_layer proof", lyr.get("proof_level") == "verified", lyr.get("proof_level"))
 
-    # --- merged from optima-plot: multi-series, dual-Y, legend, matrix, presets ---
+    # --- merged features: multi-series, dual-Y, legend, matrix, presets ---
     ms = rpc.tool("origin_plot", {"worksheet": wb["worksheet"], "x": 1, "y": [2, 3],
                                   "plot_type": "line_symbol"})
     check("multi-series in one layer", ms.get("ok") and ms.get("plots_in_layer") == 2
@@ -318,7 +318,7 @@ def main():
 
     import tempfile as _tf
     def _previews():
-        return len([f for f in os.listdir(_tf.gettempdir()) if f.startswith("optima_plot_view_")])
+        return len([f for f in os.listdir(_tf.gettempdir()) if f.startswith("origin_bridge_view_")])
     before = _previews()
     vw = rpc.tool("origin_view", {"graph": gr_handle, "width": 700})
     check("view returns image content", "image" in vw.get("_content_types", []) and vw.get("_image_len", 0) > 2000,

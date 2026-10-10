@@ -1,4 +1,4 @@
-"""optima-plot MCP server.
+"""origin-bridge MCP server.
 
 Deliberately a synchronous, newline-delimited JSON-RPC loop over stdio instead
 of the official `mcp` SDK's asyncio transport: on Windows the SDK builds an
@@ -19,8 +19,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import originlab  # noqa: E402
 
-SERVER_NAME = "optima-plot"
-SERVER_VERSION = "0.3.0"
+SERVER_NAME = "origin-bridge"
+SERVER_VERSION = "0.4.1"
 PROTOCOL = "2024-11-05"
 
 

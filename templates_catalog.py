@@ -1,5 +1,5 @@
 """
-Optima-Plot Template Catalog.
+Origin Bridge Template Catalog.
 
 A curated library of 30+ scientific chart templates inspired by the
 editaplot project. Each template declares:
@@ -744,7 +744,7 @@ def render_template(name: str, data_path: str, output_dir: str,
 
 # Make available at import time
 if __name__ == '__main__':
-    print(f'Optima-Plot has {len(TEMPLATES)} templates:')
+    print(f'Origin Bridge has {len(TEMPLATES)} templates:')
     by_cat = {}
     for t in TEMPLATES:
         by_cat.setdefault(t['category'], []).append(t['name'])

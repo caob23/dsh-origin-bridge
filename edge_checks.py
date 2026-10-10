@@ -164,7 +164,7 @@ def main():
             proc.stdin.flush()
             line = proc.stdout.readline()
             info = json.loads(line)["result"]["serverInfo"]
-            check("bin/origin-bridge.mjs launcher", info.get("name") == "optima-plot", info)
+            check("bin/origin-bridge.mjs launcher", info.get("name") == "origin-bridge", info)
         except Exception as exc:
             check("bin/origin-bridge.mjs launcher", False, repr(exc)[:120])
         finally:
