@@ -141,6 +141,32 @@ def _atexit_noop(_fake):
 
 with_fake([dict(BACK), dict(FRONT)], _atexit_noop)
 
+print("探测失败时不能谎报干净")
+
+
+def _probe_unavailable(_fake):
+    originlab._process_rows = lambda: None          # powershell 不可用 / 超时
+    killed = []
+    originlab._close_pid = lambda pid: killed.append(pid) or "closed"
+
+    info = originlab.instances()
+    check("instances 报告探测失败", info.get("probe") == "unavailable", info)
+    check("instances 不假装数量为 0", info.get("count") is None, info.get("count"))
+    check("instances 给了下一步建议", bool(info.get("next_actions")), info.get("next_actions"))
+
+    out = originlab.reclaim()
+    check("reclaim 什么都没杀", not killed, killed)
+    check("reclaim 标出探测失败", out.get("probe") == "unavailable", out)
+    check("reclaim 不说『已回收全部』", "没关" in out.get("notify", "")
+          or "探测失败" in out.get("notify", ""), out.get("notify"))
+
+    originlab._started_pids.add(1002)
+    originlab._release_on_exit()
+    check("退出钩子在探测失败时不动手", killed == [], killed)
+
+
+with_fake([dict(BACK), dict(FRONT)], _probe_unavailable)
+
 print("server 工具注册")
 import server  # noqa: E402
 

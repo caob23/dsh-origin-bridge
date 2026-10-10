@@ -138,9 +138,10 @@ def origin():
              "长会话攒页面后桥会坏：先 origin_exit 让插件重启 Origin",
              "实例数到上限时：origin_reclaim 会关掉没有窗口的残留实例"],
         )
-    existing = {row["pid"] for row in before}
-    _started_pids.update(row["pid"] for row in _process_rows() if row["pid"] not in existing)
-    _orphan_pids.update(row["pid"] for row in before if not row["window"])
+    existing = {row["pid"] for row in before} if before is not None else set()
+    after = _process_rows()
+    if after is not None:
+        _started_pids.update(row["pid"] for row in after if row["pid"] not in existing)
     _op = op
     return op
 
@@ -149,15 +150,18 @@ def origin():
 
 ORIGIN_EXE = "Origin64.exe"
 _started_pids = set()   # instances that appeared because WE connected
-_orphan_pids = set()    # background instances seen before we connected
 
 
 def _process_rows():
-    """List Origin64 processes as {pid, started, window}.
+    """List Origin64 processes as {pid, started, window}, or None if unknown.
 
     MainWindowHandle is what separates an instance the human can see from an
     orphan a departing client left behind: originpro launches Origin on demand
     and Origin does not quit when its client process exits.
+
+    A failed probe returns None, never an empty list: an empty list reads as
+    "there is nothing to reclaim", which is the one thing a caller must not be
+    told when we could not actually look.
     """
     if os.name != "nt":
         return []
@@ -168,7 +172,7 @@ def _process_rows():
         out = subprocess.run(["powershell", "-NoProfile", "-Command", script],
                              capture_output=True, text=True, timeout=25).stdout
     except Exception:
-        return []
+        return None
     rows = []
     for line in out.splitlines():
         parts = line.strip().split("|")
@@ -191,8 +195,14 @@ def _close_pid(pid):
     _terminate(pid)
     for _ in range(6):
         time.sleep(0.5)
-        if pid not in {row["pid"] for row in _process_rows()}:
+        rows = _process_rows()
+        if rows is None:
+            continue  # probe failed; keep polling rather than guessing "gone"
+        if pid not in {row["pid"] for row in rows}:
             return "closed"
+    rows = _process_rows()
+    if rows is not None and pid not in {row["pid"] for row in rows}:
+        return "closed"
     _terminate(pid, force=True)
     return "force_closed"
 
@@ -200,10 +210,14 @@ def _close_pid(pid):
 def instances():
     """Report every Origin instance: background (reclaimable) vs foreground (the user's)."""
     rows = _process_rows()
+    if rows is None:
+        return sanitize({"count": None, "probe": "unavailable",
+                         "error": "读不到进程表（powershell 不可用或超时），无法确定实例数量",
+                         "next_actions": ["重试 origin_instances", "或在任务管理器里看 Origin64.exe"]})
     for row in rows:
         row["foreground"] = bool(row["window"])
         row["ours"] = row["pid"] in _started_pids
-    return sanitize({"count": len(rows),
+    return sanitize({"count": len(rows), "probe": "ok",
                      "background": [r for r in rows if not r["foreground"]],
                      "foreground": [r for r in rows if r["foreground"]],
                      "started_by_us": sorted(_started_pids)})
@@ -216,10 +230,15 @@ def reclaim(close_background=True):
     a window may be the user's own unsaved work, so it is listed for them to close.
     """
     rows = _process_rows()
+    if rows is None:
+        return sanitize({"closed": [], "force_closed": [], "left_running": [],
+                         "probe": "unavailable",
+                         "error": "读不到进程表，没有动任何进程",
+                         "notify": "无法确认实例情况（进程探测失败），这次什么都没关。"})
     back = [r for r in rows if not r["window"]]
     front = [r for r in rows if r["window"]]
-    result = {"closed": [], "force_closed": [], "left_running": [r["pid"] for r in front],
-              "notify": ""}
+    result = {"probe": "ok", "closed": [], "force_closed": [],
+              "left_running": [r["pid"] for r in front], "notify": ""}
     if not close_background:
         result["skipped"] = [r["pid"] for r in back]
         return sanitize(result)
@@ -249,7 +268,10 @@ def _release_on_exit():
     if not _started_pids:
         return
     try:
-        for row in _process_rows():
+        rows = _process_rows()
+        if rows is None:
+            return  # cannot tell which pids are ours; leaving Origin is the safe error
+        for row in rows:
             if row["pid"] in _started_pids and not row["window"]:
                 _close_pid(row["pid"])
     except Exception:

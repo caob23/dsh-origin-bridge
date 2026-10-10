@@ -12,7 +12,7 @@
 
 <p align="center">
   <a href="#安装"><img alt="platform" src="https://img.shields.io/badge/platform-Windows%20%2B%20Origin%202021%2B-blue"></a>
-  <img alt="tests" src="https://img.shields.io/badge/tests-224%2B%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-231%2B%20passing-brightgreen">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-lightgrey">
 </p>
 
@@ -31,7 +31,7 @@
 - **数据不出本机。** 没有 API key、没有云端组件，dsh 拉起一个本地 Python 进程，通过 OriginLab 官方的 [`originpro`](https://pypi.org/project/originpro/) 驱动你机器上的 Origin。
 - **每一步都有证据。** Origin 的 X-Function 普遍"返回成功但什么都没发生"。这里画图后读回轴范围与数据跨度比对，导出后校验文件存在/体积/文件头魔数，样式逐项读回——读不回的进 `failed` 列表，不会假装成功。
 - **不是 74 个工具，是 27 个。** 每个都有实测用途，工具描述里写着实测限制，模型不会踩坑。
-- **不是玩具。** 224–230 项自动化测试（本机带真实工作站 .bin 样本时 230）覆盖协议滥用、边界条件、坏句柄、真实数据文件；originpro 的十几个文档陷阱全部记录在案并绕开。
+- **不是玩具。** 231–237 项自动化测试（本机带真实工作站 .bin 样本时 237）覆盖协议滥用、边界条件、坏句柄、真实数据文件；originpro 的十几个文档陷阱全部记录在案并绕开。
 
 ## 它能做什么
 
@@ -205,6 +205,10 @@ Origin Bridge 的做法：
 
 **为什么返回句柄而不是 Origin 引用字符串。** `[Book1]Sheet1!` 这类引用对大小写、空格、活动页状态都敏感，写错了不报错只静默失败。引擎内部持有真实对象，把 `ws-1` / `gr-2` 交给模型原样传回。
 
+**为什么进程探测失败要报 `probe: "unavailable"` 而不是空列表。** `origin_instances` / `origin_reclaim` 靠读进程表区分"没人看的后台实例"和"用户正开着的窗口"。如果 powershell 不可用或超时就让它们返回空集合，调用方读到的是"没有残留、没有前台窗口"——一个假的清白结论。宁可说"我没看清、这次什么都没做"，也不能把"未知"报成"没事"。
+
+**为什么连接时不自动回收既存的无窗口实例。** 被 dsh 驱动的那个 Origin **本身就是无窗口的**：可见性只说明"没有人在屏幕前看它"，不说明"没有客户端在用它"。开机时顺手杀掉所有无窗口实例，会直接砍掉用户当前会话正在跑的任务。所以只有显式 `origin_reclaim` 才动手，且只动无窗口的；有窗口的一律留给用户自己关。
+
 **两条画图路径，各自实测过。** 单 x/单 y 走 LabTalk `plotxy`——那是 Origin 工具栏自己的路径，主题、配色、自动缩放都对。多条曲线 / 指定层 / 指定模板走 `layer.add_plot()` + `layer.rescale()`：`add_plot` 不 rescale 就是 0..10 空轴，但 rescale 之后颜色/符号/线宽全部正确，且**只有它能精确投到某一层**——`plotxy` 给限定范围时返回 True 却画到别的页/层上去了。
 
 **为什么每次写入都读回。** `plot()` 读回轴范围和数据跨度比对，不符就报 `plot_axis_degenerate`；`origin_export` 校验文件存在、体积、文件头魔数；`style()` / `legend()` 每项读回，读不进的进 `failed`。
@@ -278,7 +282,7 @@ dsh-origin-bridge/
 ├── icon.svg             # 卡片图标（scripts/make_icon.py 生成）
 ├── locale/*.json        # dsh 卡片显示名与描述
 ├── scripts/make_preview.py # 重新生成 docs/preview.png（关掉图例后才导出）
-└── test_*.py / smoke_test.py / edge_checks.py   # 224–230 项测试
+└── test_*.py / smoke_test.py / edge_checks.py   # 231–237 项测试
 ```
 
 重新生成图标：`python scripts/make_icon.py`（只需要 numpy，PNG 由 stdlib 手写）。
