@@ -82,7 +82,7 @@ TOOLS = [
     },
     {
         "name": "origin_plot",
-        "description": "在工作表上画图。x/y 用 1 起始列号或列名；y 可以给列表，一次把多条曲线画进同一层。plot_type: line|scatter|line_symbol|column。给 template 用 Origin 自带图模建页（如 doubley/heat_map/line），给 graph+layer 则往已有图页的指定层里加曲线。",
+        "description": "在工作表上画图。x/y 用 1 起始列号或列名；y 可以给列表，一次把多条曲线画进同一层。plot_type: line|scatter|line_symbol|column。给 template 用 Origin 自带图模建页（如 doubley/heat_map/line），给 graph+layer 则往已有图页的指定层里加曲线。返回里有 warnings 时代表图可能不可读（线性轴跨数量级等），要把选项交给用户决定。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -235,7 +235,7 @@ TOOLS = [
     },
     {
         "name": "origin_figure",
-        "description": "主路径：一次调用完成 导入/写数 → 画图 → 轴标题 → 导出图片 → 保存可编辑 .opju。用户只想“把这份数据画成图并给我文件”时用它，不要拆成多步。",
+        "description": "主路径：一次调用完成 导入/写数 → 画图 → 轴标题 → 导出图片 → 保存可编辑 .opju。用户只想“把这份数据画成图并给我文件”时用它，不要拆成多步。返回里若有 warnings，说明图虽然画成了但可能不可读（例如线性横轴跨了几个数量级，点全挤在最左边）：把 next_actions 里的方案讲给用户让他选，不要自己擅自改轴。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -536,6 +536,14 @@ def _handle(msg):
         except originlab.OriginError as exc:
             return _tool_result(call_id, {"ok": False, "code": exc.code, "message": exc.message,
                                           "next_actions": exc.next_actions, **exc.extra}, True)
+        except KeyError as exc:
+            # A model can omit a required argument even though the schema names it;
+            # that is a bad_arguments answer, not a crash with a stack trace.
+            want = (tool.get("inputSchema") or {}).get("required") or []
+            return _tool_result(call_id, {"ok": False, "code": "bad_arguments",
+                                          "message": "%s 缺少参数 %s（该工具要求 %s）"
+                                                     % (name, exc, want or "见 schema"),
+                                          "next_actions": ["补上缺的参数再调用"]}, True)
         except Exception as exc:  # noqa: BLE001 - report, never kill the server
             _log("tool %s crashed: %r" % (name, exc))
             bare = isinstance(exc, (SystemError, TypeError, AttributeError))

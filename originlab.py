@@ -47,7 +47,7 @@ SCALE_NAMES = {1: "linear", 2: "log10", 3: "probability", 4: "probit", 5: "recip
                6: "offset_reciprocal", 7: "logit", 8: "ln", 9: "log2"}
 # new_graph(template=NAME) accepts these OriginPro 2024 template stems (extension
 # optional) and returns None for an unknown one, which is how they get validated.
-GRAPH_TEMPLATES = ("line", "scatter", "linesymb", "column", "doubley", "dply",
+GRAPH_TEMPLATES = ("line", "scatter", "linesymb", "column", "doubley",
                    "heat_map", "cmap", "mesh", "contline", "contgray", "3d",
                    "glwireface", "pie", "box", "histdist", "polar", "ternary",
                    "vector", "errbar")
@@ -661,7 +661,9 @@ def write_columns(columns, book_name=""):
         ws = op.new_sheet(lname=book_name or "")
         for i, (name, values) in enumerate(columns.items()):
             try:
-                nums = [float(v) for v in values]
+                # None is a documented missing value, not a non-numeric cell: it has
+                # to reach Origin as an empty cell instead of killing the write.
+                nums = [None if v is None else float(v) for v in values]
             except (TypeError, ValueError) as exc:
                 raise OriginError("bad_arguments", "列 %r 里有非数值项：%s" % (name, exc),
                                   ["数值列只接受数字或 null；文本请放 Notes 页，或先把分类编码成数字"])
@@ -676,6 +678,10 @@ def write_block(headers, rows, book_name=""):
     which is why a 40-column sheet is slow; from_list2 writes the block at once."""
     if not rows or not isinstance(rows, (list, tuple)):
         raise OriginError("bad_arguments", "rows 必须是非空的二维列表")
+    if any(not isinstance(r, (list, tuple)) for r in rows):
+        raise OriginError("bad_arguments",
+                          "rows 得是二维的（每行一个列表），收到 %r" % (rows[0],),
+                          [['[["x","y"],[1,2],[3,4]] 这种形状']])
     ncol = max(len(r) for r in rows)
     if headers and len(headers) != ncol:
         raise OriginError("bad_arguments", "headers 有 %d 项，但 rows 最宽 %d 列" % (len(headers), ncol))
@@ -745,6 +751,39 @@ def column_formula(worksheet, col, formula, label="", units=""):
                             else {"next_actions": ["origin_inspect 看这一列现在到底是什么值"]})})
 
     return call(run)
+
+
+def _decade_span(values):
+    """How many orders of magnitude the positive values cover (0 if not measurable)."""
+    pos = [v for v in (values or []) if isinstance(v, (int, float)) and v > 0]
+    if len(pos) < 2:
+        return 0.0
+    lo, hi = min(pos), max(pos)
+    return math.log10(hi / lo) if hi > lo else 0.0
+
+
+def _axis_review(lay, xvals):
+    """Flag a plot whose X axis is linear across several orders of magnitude.
+
+    A Bode/EIS sweep spans 1e5..1e-2 Hz: on a linear axis every point piles up
+    against the y axis and the exported PNG is unreadable, yet nothing about the
+    call failed. The bridge cannot decide for the user whether they want a log
+    axis, a zoomed range or a Nyquist view, so it says so and hands the choice
+    back.
+    """
+    scale = _safe(lambda: lay.xscale)
+    decades = _decade_span(xvals)
+    if scale not in (None, 1) or decades < 3:
+        return None
+    return ("X 轴是线性刻度但数据跨了 %.1f 个数量级（%g..%g），点会全挤在最左边，"
+            "图基本没法看。这不算出错，但要让用户决定怎么处理，别自己改轴"
+            % (decades, min(v for v in xvals if v > 0), max(v for v in xvals if v > 0)))
+
+
+REVIEW_OPTIONS = ["origin_style 把 x_scale 设成 log10（对数横轴，Bode 图常用）",
+                  "只画其中一段：origin_style 用 xlim 限定范围",
+                  "换成别的 X 轴：如阻抗用 Z' 对 Z'' 画 Nyquist 图",
+                  "保持现状（用户就是想看线性轴）"]
 
 
 def plot(worksheet, x=1, y=2, plot_type="line", graph_name="", title="",
@@ -844,6 +883,10 @@ def plot(worksheet, x=1, y=2, plot_type="line", graph_name="", title="",
             raise OriginError("plot_incomplete",
                               "要求 %d 条曲线，层里只有 %d 条" % (len(yis), drawn),
                               ["origin_inspect 看该层，或改用 origin_view 目视确认"])
+        review = _axis_review(lay, xvals)
+        if review:
+            span["warnings"] = [review]
+            span["next_actions"] = list(REVIEW_OPTIONS)
         return sanitize({"graph": _bind("gr", gr, gr.name), "plot_type": plot_type,
                          "channel": channel, "template": tpl,
                          "source_sheet": _safe(lambda: ws.name, ""),
@@ -1140,6 +1183,8 @@ def add_layer(graph, layer_type="right"):
     right-Y layer reads back as 'RightY'. Filling it is left to origin_plot with
     layer=<index>, which is the only path measured to draw into a chosen layer.
     """
+    if isinstance(layer_type, str) and layer_type.strip().isdigit():
+        layer_type = int(layer_type.strip())   # "2" from a model is still the code 2
     if isinstance(layer_type, str) and layer_type.lower() in LAYER_TYPES:
         code = LAYER_TYPES[layer_type.lower()]
     elif isinstance(layer_type, int) and layer_type in LAYER_TYPES.values():
@@ -1557,6 +1602,9 @@ def figure(source="", columns=None, x=1, y=1, plot_type="line", title="",
     p = plot(info["worksheet"], x=x, y=y, plot_type=plot_type, title=title, template=template)
     steps.append({"step": "plot", "graph": p["graph_page"], "type": plot_type,
                   "channel": p.get("channel", ""), "plots": p.get("plots_in_layer")})
+    warns = list(p.get("warnings") or [])
+    if warns:
+        steps.append({"step": "review", "why": str(warns[0])[:90]})
     if x_title or y_title:
         st = style(p["graph"], x_title=x_title, y_title=y_title)
         steps.append({"step": "style", **st})
@@ -1568,6 +1616,11 @@ def figure(source="", columns=None, x=1, y=1, plot_type="line", title="",
         steps.append({"step": "legend", "proof_level": lg.get("proof_level")})
 
     out = {"data": info, "plot": p, "style": st, "legend": lg}
+    if warns:
+        # Top level, because a delivered-but-unreadable PNG is exactly the kind of
+        # thing the model must raise with the user rather than quietly hand over.
+        out["warnings"] = warns
+        out["next_actions"] = list(p.get("next_actions") or []) + ["origin_view 目视确认后再决定"]
     deliver = {}
     if export_path or output_dir:
         base = export_path or os.path.join(output_dir, "%s.%s" % (p["graph_page"], fmt))
@@ -1730,7 +1783,9 @@ def close_pages(kind="graph", names=None, dry_run=False):
     targets, had = call(collect)
     wanted = [_safe(lambda p=p: p.name, "?") for p in targets]
     if not targets:
-        return sanitize({"closed": [], "asked": [], "note": "没有匹配的页面"})
+        # Stable shape: a dry run always answers with would_close, empty or not.
+        return sanitize({"closed": [], "asked": [], "would_close": [],
+                         "note": "没有匹配的页面"})
     if dry_run:
         return sanitize({"would_close": wanted, "dry_run": True})
     errors = call(destroy, targets)
