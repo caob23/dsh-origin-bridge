@@ -11,3 +11,6 @@ npm-*.tgz
 package-lock.json
 fixtures/synthetic_*.bin
 fixtures/not_a_bin.bin
+
+# 用户自己的工作站导出数据，只在本地当真题用，不进仓库
+cases/realdata/
