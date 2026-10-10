@@ -167,6 +167,51 @@ def _probe_unavailable(_fake):
 
 with_fake([dict(BACK), dict(FRONT)], _probe_unavailable)
 
+print("掉线重连（call 层）")
+_real_reset = originlab._reset_connection
+
+check("SystemError 算掉线", originlab._dead_app(
+    SystemError("<built-in function ApplicationBase_Save> returned a result with an exception set")))
+check("originpro 报的连接失败算掉线", originlab._dead_app(
+    originlab.OriginError("connection_error", "连不上 Origin 自动化服务器："
+                          "<built-in function ApplicationBase_Path> returned a result"
+                          " with an exception set")))
+check("参数错误不算掉线", not originlab._dead_app(
+    originlab.OriginError("bad_column", "列号从 1 开始，收到 0")))
+check("被包成 internal_error 的 SystemError 也算掉线", originlab._dead_app(
+    originlab.OriginError("internal_error",
+                          "SystemError: <built-in function ApplicationBase_Save> returned a "
+                          "result with an exception set")))
+check("普通 ValueError 不算掉线", not originlab._dead_app(ValueError("识别不出分隔符")))
+
+tries = []
+
+
+def _dies_once(*a, **k):
+    tries.append(1)
+    if len(tries) == 1:
+        raise SystemError("<built-in function ApplicationBase_Save> returned a result "
+                          "with an exception set")
+    return "recovered"
+
+
+resets = []
+originlab._reset_connection = lambda: resets.append(1) or True
+try:
+    check("掉线后自动重连并完成任务", originlab.call(_dies_once) == "recovered", tries)
+    check("只重试一次", len(tries) == 2 and len(resets) == 1, (tries, resets))
+
+    tries[:] = []
+    resety = []
+    originlab._reset_connection = lambda: resety.append(1) or False
+    try:
+        originlab.call(_dies_once)
+        check("重连不可用时不无限重试", False, "本该抛错")
+    except SystemError as exc:
+        check("重连不可用时把原始错误交出去", "ApplicationBase_Save" in str(exc), str(exc))
+finally:
+    originlab._reset_connection = _real_reset
+
 print("server 工具注册")
 import server  # noqa: E402
 

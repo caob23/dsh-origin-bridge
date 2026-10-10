@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import originlab  # noqa: E402
 
 SERVER_NAME = "origin-bridge"
-SERVER_VERSION = "0.4.1"
+SERVER_VERSION = "0.4.2"
 PROTOCOL = "2024-11-05"
 
 
@@ -106,7 +106,7 @@ TOOLS = [
     },
     {
         "name": "origin_read_file",
-        "description": "只解析数据文件、不碰 Origin：返回编码、分隔符、表头行数、每列长名/单位/有效行数。拿到陌生 .dat/.csv 先用它看清结构，再决定 origin_import 用哪几列。支持 #、//、!、; 注释、BOM、GBK、空格对齐、Fortran 的 1.5d+00 指数、NA/- 缺失值。.bin 走另一条解析路线：返回技术标签（CV/LSV/IMP/i-t）、点数、两个 float32 数组的范围和 role_confidence。",
+        "description": "只解析数据文件、不碰 Origin：返回编码、分隔符、表头行数、每列长名/单位/有效行数，以及仪器参数 metadata。拿到陌生 .dat/.csv/.txt 先用它看清结构，再决定 origin_import 用哪几列。支持 #、//、!、; 注释、BOM、GBK、空格对齐、Fortran 的 1.5d+00 指数、NA/- 缺失值、Origin 三行表头（Long Name/Units/Comments），也支持电化学工作站（CH Instruments 等）导出的 txt：前面几十行参数说明会被跳进 metadata，紧贴数据的 Potential/V, Current/A 这类表头按斜杠拆出列名和单位。.bin 走另一条解析路线：返回技术标签（CV/LSV/IMP/i-t）、点数、两个 float32 数组的范围和 role_confidence。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -128,10 +128,12 @@ TOOLS = [
                 "series": {"type": "integer", "default": 0, "description": "该层里的第几条曲线，0 起"},
                 "x_title": {"type": "string"},
                 "y_title": {"type": "string"},
-                "x_scale": {"type": "string", "enum": ["linear", "log10", "ln", "log2", "probit",
-                                                        "probability", "reciprocal", "offset_reciprocal", "logit"]},
-                "y_scale": {"type": "string", "enum": ["linear", "log10", "ln", "log2", "probit",
-                                                        "probability", "reciprocal", "offset_reciprocal", "logit"]},
+                "x_scale": {"type": "string", "enum": ["linear", "log", "log10", "ln", "log2",
+                                                        "probit", "probability", "reciprocal",
+                                                        "offset_reciprocal", "logit"]},
+                "y_scale": {"type": "string", "enum": ["linear", "log", "log10", "ln", "log2",
+                                                        "probit", "probability", "reciprocal",
+                                                        "offset_reciprocal", "logit"]},
                 "xlim": {"type": "array", "description": "[from,to] 或 [from,to,step]"},
                 "ylim": {"type": "array", "description": "[from,to] 或 [from,to,step]"},
                 "xtick": {"type": "number", "description": "X 刻度步长"},
@@ -160,7 +162,7 @@ TOOLS = [
     },
     {
         "name": "origin_fit",
-        "description": "拟合。kind=linear 线性（Origin 标准版可用）；非线性直接用预设名 kind=gauss|lorentz|voigt|expdec1|expdec2|sine|power|logistic|boltzmann|doseresp|cubic（本机逐个实测可用），或 kind=nlfitsing + func 给 Origin 的函数名（区分大小写：Gauss 对、gauss1 不存在）。可固定参数 fixed、给初值 starts、加边界 bounds，并可生成报告表。缺失值已消毒为 null。",
+        "description": "拟合。kind=linear 线性（Origin 标准版可用）；非线性直接用预设名 kind=gauss|lorentz|voigt|expdec1|expdec2|sine|power|logistic|boltzmann|doseresp|cubic（本机逐个实测可用；poly3=cubic、expdecay=expdec1 是别名），或 kind=nlfitsing + func 给 Origin 的函数名（区分大小写：Gauss 对、gauss1 不存在）。func 只能是内置函数名，自定义表达式不支持。只给 func 不给 kind 时按非线性执行并在 note 里说明。可固定参数 fixed、给初值 starts、加边界 bounds，并可生成报告表。缺失值已消毒为 null。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -169,9 +171,10 @@ TOOLS = [
                 "y": {"type": ["integer", "string"], "default": 2},
                 "kind": {"type": "string", "enum": ["linear", "nlfitsing", "gauss", "lorentz",
                                                     "voigt", "expdec1", "expdec2", "sine", "power",
-                                                    "logistic", "boltzmann", "doseresp", "cubic"],
+                                                    "logistic", "boltzmann", "doseresp", "cubic",
+                                                    "poly3", "expdecay"],
                          "default": "linear"},
-                "func": {"type": "string", "description": "非线性内置函数名，如 Gauss / ExpDec1"},
+                "func": {"type": "string", "description": "Origin 内置函数名（区分大小写），如 Gauss / ExpDec1；给了 func 就按非线性拟合，不要写自定义表达式"},
                 "fixed": {"type": "object", "description": "固定参数 {参数名: 值}，如 {\"y0\": 0}"},
                 "starts": {"type": "object", "description": "初值 {参数名: 值}；linear 用 Slope/Intercept"},
                 "bounds": {"type": "object", "description": "边界 {参数名: [下界, 上界]}，null 表示不设"},
@@ -189,7 +192,7 @@ TOOLS = [
     },
     {
         "name": "origin_export",
-        "description": "把图页导出为图片文件，并校验文件确实存在、够大、文件头正确（Origin 有静默失败的历史）。fmt: png/tif/svg/pdf/emf。",
+        "description": "把图页导出为图片文件，并校验文件确实存在、够大、文件头正确（Origin 有静默失败的历史）。fmt: png/tif/jpg/svg/pdf/emf（tiff→tif、jpeg→jpg 会自动改写扩展名）。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -313,7 +316,7 @@ TOOLS = [
             "properties": {
                 "graph": {"type": "string"},
                 "layer_type": {"type": ["string", "integer"], "default": "right",
-                               "description": "bottom_left|top|right|left|top_right|bottom_right|inset，或对应整数 0-6"},
+                               "description": "bottom(=bottom_left)|top|right|left|top_right|bottom_right|inset，或对应整数 0-6"},
             },
             "required": ["graph"],
         },
@@ -535,9 +538,18 @@ def _handle(msg):
                                           "next_actions": exc.next_actions, **exc.extra}, True)
         except Exception as exc:  # noqa: BLE001 - report, never kill the server
             _log("tool %s crashed: %r" % (name, exc))
-            return _tool_result(call_id, {"ok": False, "code": "internal_error",
-                                          "message": "%s: %s" % (type(exc).__name__, exc),
-                                          "next_actions": ["origin_status 看连接是否还活着"]}, True)
+            bare = isinstance(exc, (SystemError, TypeError, AttributeError))
+            if bare:
+                originlab.mark_suspect()
+            return _tool_result(
+                call_id,
+                {"ok": False,
+                 "code": "origin_unavailable" if bare else "internal_error",
+                 "message": "%s: %s" % (type(exc).__name__, exc),
+                 "next_actions": (["Origin 的 COM 通道进入了坏状态（多为页面被销毁后残留错误）",
+                                   "重新 origin_import / origin_write 拿新句柄，旧句柄已作废",
+                                   "还是不行就 origin_exit 让插件重启 Origin，或 origin_reclaim 关后台实例"]
+                                  if bare else ["origin_status 看连接是否还活着"])}, True)
 
     if method == "shutdown":
         return {"jsonrpc": "2.0", "id": call_id, "result": {}}

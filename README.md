@@ -42,10 +42,11 @@
 | "给这条谱图加个图例，放右上角" | `origin_legend`（文字/位置/可见性全部读回） |
 | "这组 EIS 数据拟合一下" | `origin_fit`（gauss / lorentz / voigt / expdec1… 预设，参数可固定） |
 | "这是 CHI 工作站导出的 cv.bin" | `origin_import` 直接读二进制，电势轴按头部方法参数重建 |
+| "这是工作站导出的 txt，前面一大段参数" | `origin_import` 自动跳过参数头，紧贴数据的那行（`Potential/V, Current/A`）当表头，单位拆到列的 Units 里，参数进 `metadata` |
 | "做一张 XPS 图" | `origin_chart_render`（40 个科研预设：轴标题/图类型/建议拟合） |
 | "热力图显示这个矩阵" | `origin_matrix`（heat_map / cmap / mesh / contline，Origin 自带图模） |
 
-数据源支持：`.dat` `.csv` `.txt` `.tsv`（自动嗅探分隔符、GBK、BOM、多行表头、Fortran 指数、NA/-）、`.xls` `.xlsx`、以及头部为 `80 F2 1B 00` 的电化学工作站二进制 `.bin`。
+数据源支持：`.dat` `.csv` `.txt` `.tsv`（自动嗅探分隔符、GBK、BOM、多行表头、Fortran 指数、NA/-）、`.xls` `.xlsx`、电化学工作站（CH Instruments 等）导出的 `.txt`（几十行仪器说明自动收进 `metadata`，不会把首行日期当成列名），以及头部为 `80 F2 1B 00` 的电化学工作站二进制 `.bin`。
 
 ## 安装
 

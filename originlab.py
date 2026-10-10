@@ -31,14 +31,20 @@ PLOT_CODES = {"line": 200, "scatter": 201, "line_symbol": 202, "column": 203}
 PLOT_LETTERS = {"line": "l", "scatter": "s", "line_symbol": "y", "column": "c"}
 # originpro passes this integer straight to layadd, and the layer's own name is the
 # proof: read back as BottomXLeftY/TopX/RightY/LeftY/TopXRightY/BottomXRightY/Inset.
-LAYER_TYPES = {"bottom_left": 0, "top": 1, "right": 2, "left": 3,
+# Humans say "bottom" for the plain below-axis layer, which is code 0 (BottomXLeftY).
+LAYER_TYPES = {"bottom": 0, "bottom_left": 0, "top": 1, "right": 2, "left": 3,
                "top_right": 4, "bottom_right": 5, "inset": 6}
 # What Origin itself calls each layer, read back from layer.name after add_layer.
 LAYER_NAME_BY_CODE = {0: "BottomXLeftY", 1: "TopX", 2: "RightY", 3: "LeftY",
                       4: "TopXRightY", 5: "BottomXRightY", 6: "Inset"}
 # originpro's scale setter takes a name but the getter returns the int.
-SCALE_TYPES = {"linear": 1, "log10": 2, "probability": 3, "probit": 4, "reciprocal": 5,
-               "offset_reciprocal": 6, "logit": 7, "ln": 8, "log2": 9}
+SCALE_TYPES = {"linear": 1, "log10": 2, "log": 2, "probability": 3, "probit": 4,
+               "reciprocal": 5,
+               "offset_reciprocal": 6, "logit": 7, "ln": 8, "natural_log": 8, "log2": 9}
+# originpro's setter only understands its own names, so a friendly alias such as
+# "log" has to be translated back before it reaches layer.xscale.
+SCALE_NAMES = {1: "linear", 2: "log10", 3: "probability", 4: "probit", 5: "reciprocal",
+               6: "offset_reciprocal", 7: "logit", 8: "ln", 9: "log2"}
 # new_graph(template=NAME) accepts these OriginPro 2024 template stems (extension
 # optional) and returns None for an unknown one, which is how they get validated.
 GRAPH_TEMPLATES = ("line", "scatter", "linesymb", "column", "doubley", "dply",
@@ -49,8 +55,9 @@ GRAPH_TEMPLATES = ("line", "scatter", "linesymb", "column", "doubley", "dply",
 # these were each constructed successfully on OriginPro 2024 SR1.
 FIT_PRESETS = {"gauss": "Gauss", "gaussian": "Gauss", "lorentz": "Lorentz",
                "voigt": "Voigt", "expdec1": "ExpDec1", "expdec2": "ExpDec2",
-               "sine": "Sine", "power": "Power", "logistic": "Logistic",
-               "boltzmann": "Boltzmann", "doseresp": "DoseResp", "cubic": "Cubic"}
+               "expdecay": "ExpDec1", "sine": "Sine", "power": "Power",
+               "logistic": "Logistic", "boltzmann": "Boltzmann", "doseresp": "DoseResp",
+               "cubic": "Cubic", "poly3": "Cubic"}
 # Legend anchors are layer DATA coordinates (Legend.x/.y read back exactly), so a
 # position is a fraction of the axis span rather than a page measurement.
 LEGEND_POSITIONS = {
@@ -62,6 +69,7 @@ LEGEND_POSITIONS = {
     "inside": (0.75, 0.80),
 }
 IMAGE_MAGIC = {".png": b"\x89PNG\r\n\x1a\n", ".tif": b"II*\x00", ".tiff": b"II*\x00",
+               ".jpg": b"\xff\xd8\xff", ".jpeg": b"\xff\xd8\xff",
                ".pdf": b"%PDF", ".svg": b"<", ".emf": b"\x01\x00\x00\x00"}
 ASCII_EXTS = (".dat", ".csv", ".txt", ".tsv")
 
@@ -81,6 +89,7 @@ _q = queue.Queue()
 _thread = None
 _thread_lock = threading.Lock()
 _op = None
+_suspect = False
 
 
 def _worker():
@@ -94,22 +103,78 @@ def _worker():
 
 
 def call(fn, *args, timeout=240, **kwargs):
-    global _thread
+    global _thread, _suspect
     with _thread_lock:
         if _thread is None or not _thread.is_alive():
             _thread = threading.Thread(target=_worker, daemon=True, name="origin-com")
             _thread.start()
-    box = {"done": threading.Event()}
-    _q.put((fn, args, kwargs, box))
-    if not box["done"].wait(timeout):
-        raise OriginError(
-            "com_timeout",
-            "Origin 在 %d 秒内没有响应" % timeout,
-            ["看 Origin 窗口是否卡在对话框或许可证弹窗", "任务管理器结束 Origin64.exe 后重试"],
-        )
-    if "error" in box:
-        raise box["error"]
-    return box["value"]
+    if _suspect:
+        # A previous call left Origin's COM channel in a bad state (a destroyed page
+        # keeps a C-level error pending, which then surfaces from an unrelated call).
+        # Re-attach once, lazily, so one wedge does not poison the whole session.
+        _suspect = False
+        _reset_connection()
+    for attempt in (0, 1):
+        box = {"done": threading.Event()}
+        _q.put((fn, args, kwargs, box))
+        if not box["done"].wait(timeout):
+            raise OriginError(
+                "com_timeout",
+                "Origin 在 %d 秒内没有响应" % timeout,
+                ["看 Origin 窗口是否卡在对话框或许可证弹窗", "任务管理器结束 Origin64.exe 后重试"],
+            )
+        if "error" not in box:
+            return box["value"]
+        exc = box["error"]
+        # Once per call: Origin's cached COM pointer can go stale when the process
+        # dies (user closed it, instance limit, exit tool). Every later call then
+        # fails identically, so drop the pointer and let origin() re-attach.
+        if attempt == 0 and _dead_app(exc) and _reset_connection():
+            continue
+        raise exc
+
+
+_DEAD_APP_MARKS = ("returned a result with an exception set", "ApplicationBase_",
+                   "-2147417851", "-2147023170", "RPC 服务器不可用",
+                   "The object invoked has disconnected from its clients",
+                   "com_error", "Pywintypes.com_error")
+
+
+def _dead_app(exc):
+    """True when Origin's COM connection itself is gone, not when an argument was bad."""
+    if isinstance(exc, OriginError):
+        # server.py flattens a raw SystemError into code="internal_error" before it
+        # reaches here, so judge by the message text rather than the code.
+        return any(m in exc.message for m in _DEAD_APP_MARKS)
+    text = "%s: %s" % (type(exc).__name__, exc)
+    return isinstance(exc, SystemError) or any(m in text for m in _DEAD_APP_MARKS)
+
+
+def _reset_connection():
+    """Forget the cached originpro module and its dangling Application pointer."""
+    global _op, _suspect
+    _op = None
+    _suspect = False
+    # Page wrappers belong to the Origin process we just lost: keeping them would
+    # let the next call fail with a mystery error instead of "句柄无效，请重新导入".
+    _handles.clear()
+    _names.clear()
+    mod = sys.modules.get("originpro")
+    if mod is None:
+        return False
+    po = getattr(mod, "po", None)
+    if po is not None and "_app" in getattr(po, "__dict__", {}):
+        try:
+            po.__dict__["_app"] = None
+        except Exception:
+            return False
+    return True
+
+
+def mark_suspect():
+    """Flag the COM channel as damaged: the next call re-attaches before running."""
+    global _suspect
+    _suspect = True
 
 
 def origin():
@@ -357,11 +422,23 @@ def _round2(v):
 
 def _col_index(ws, col):
     ncol = int(_safe(lambda: ws.cols, 0) or 0)
+    if ncol == 0:
+        # A handle that resolves to a page with no columns is always either stale
+        # (the project was closed underneath us) or an empty book. Saying "列号超出
+        # 范围（共 0 列）" would send the model to re-count columns.
+        raise OriginError("sheet_empty", "这张工作表没有任何列，句柄可能已失效：%s"
+                          % (_safe(lambda: ws.name, "?"),),
+                          ["origin_inspect 看当前页面", "重新 origin_import 或 origin_write 拿新句柄"])
     idx = int(col) if isinstance(col, float) and float(col).is_integer() else (
         int(col) if isinstance(col, int) else None)
     if idx is not None:
-        idx = idx - 1 if idx >= 1 else idx
-        if 0 <= idx < ncol:
+        # Column numbers are 1-based everywhere in this API. Passing the internal
+        # 0-based index straight through would silently rewrite the first column.
+        if idx < 1:
+            raise OriginError("bad_column", "列号从 1 开始，收到 %s" % col,
+                              ["想操作第 1 列就传 1，或改用列名字符串"])
+        idx = idx - 1
+        if idx < ncol:
             return idx
         raise OriginError("bad_column", "列号 %s 超出范围（共 %d 列）" % (col, ncol),
                           ["列号从 1 开始，或用列名字符串"])
@@ -394,6 +471,16 @@ def _extend_to(ws, col):
     return want - 1
 
 
+def _numeric_columns(ws):
+    """Column indices that hold at least one real number (0-based)."""
+    out = []
+    for i in range(int(_safe(lambda: ws.cols, 0) or 0)):
+        vals = _safe(lambda i=i: ws.to_list(i), []) or []
+        if any(isinstance(v, (int, float)) and not isinstance(v, bool) for v in vals):
+            out.append(i)
+    return out
+
+
 def _sheet_info(ws):
     rows = int(_safe(lambda: ws.rows, 0) or 0)
     cols = int(_safe(lambda: ws.cols, 0) or 0)
@@ -410,13 +497,13 @@ def _sheet_info(ws):
     }
 
 
-def _verify_file(path, must_be_image=True):
+def _verify_file(path, must_be_image=True, min_bytes=1024):
     size = os.path.getsize(path)
     ext = os.path.splitext(path)[1].lower()
     with open(path, "rb") as fh:
         head = fh.read(24)
     magic = IMAGE_MAGIC.get(ext) if must_be_image else None
-    ok = size > 1024 and (magic is None or head.startswith(magic))
+    ok = size > min_bytes and (magic is None or head.startswith(magic))
     dims = None
     if ext == ".png" and head[12:16] == b"IHDR":
         dims = list(struct.unpack(">II", head[16:24]))
@@ -547,7 +634,16 @@ def import_file(path, book_name=""):
             raise OriginError("import_empty", "读进来了但是 0 行：%s" % path,
                               ["自研解析器也失败了：%s" % (parsed or {}).get("fallback_reason", "见上"),
                                "确认文件里有数值行，或改用 origin_read_file 先看结构"])
-        info.update({"source": path, "format": ext, "channel": "origin_from_file"})
+        warns = []
+        if not _numeric_columns(ws):
+            # Origin happily turns prose into a one-row text sheet; saying rows=1
+            # and calling it a success is how a bad file reaches a plot step.
+            warns.append("导进来的列里没有一列是数值（共 %d 列 %d 行），这张表画不出图：%s"
+                         % (info.get("cols"), info.get("rows"), path))
+        info.update({"source": path, "format": ext, "channel": "origin_from_file",
+                     "warnings": info.get("warnings", []) + warns})
+        if warns:
+            info["next_actions"] = ["用 origin_read_file 看文件真实结构，确认它是不是数据文件"]
         return sanitize(info)
 
     return call(run)
@@ -616,6 +712,8 @@ def column_formula(worksheet, col, formula, label="", units=""):
 
     def run():
         idx = _col_index(ws, col) if _col_exists(ws, col) else _extend_to(ws, col)
+        prev_formula = _safe(lambda: str(ws.get_formula(idx)), "")
+        before = [v for v in _safe(lambda: list(ws.to_list(idx)), []) if v is not None]
         # originpro 1.1.15 documents set_formula's column as 1-offset, but it is
         # 0-based here: passing idx+1 grabs a non-existent column and the library
         # dies inside SetStrProp on a None object.
@@ -632,9 +730,19 @@ def column_formula(worksheet, col, formula, label="", units=""):
                               ["LabTalk 里底 10 对数是 log() 不是 log10()",
                                "跨列引用要先绑定 range，不能内联 [Book]Sheet!col(N)",
                                "列号用 Col(1) 这种当前表写法试试"])
+        warns = []
+        proof = "verified"
+        if before and before == vals and prev_formula.strip() != str(formula).strip():
+            # A bogus LabTalk formula on a column that already had data leaves the
+            # old numbers in place, so "computed_rows > 0" alone cannot prove much.
+            warns.append("改了公式但这一列的数值一个都没变（%d 行原样保留）：Origin 可能没有执行它"
+                         % len(vals))
+            proof = "unverified"
         return sanitize({"column": idx + 1, "formula": str(formula),
                          "computed_rows": len(vals), "first": vals[0], "last": vals[-1],
-                         "columns": info["columns"], "proof_level": "verified"})
+                         "columns": info["columns"], "warnings": warns, "proof_level": proof,
+                         **({} if proof == "verified"
+                            else {"next_actions": ["origin_inspect 看这一列现在到底是什么值"]})})
 
     return call(run)
 
@@ -794,13 +902,15 @@ def style(graph, layer=0, series=None, x_title="", y_title="", x_scale="", y_sca
             if want is None:
                 raise OriginError("bad_scale", "未知刻度类型：%r" % x_scale,
                                   ["可选 %s" % sorted(SCALE_TYPES)])
-            attempt("x_scale", lambda: setattr(lay, "xscale", x_scale), lambda: lay.xscale, want)
+            attempt("x_scale", lambda: setattr(lay, "xscale", SCALE_NAMES[want]),
+                    lambda: lay.xscale, want)
         if y_scale:
             want = SCALE_TYPES.get(str(y_scale).lower())
             if want is None:
                 raise OriginError("bad_scale", "未知刻度类型：%r" % y_scale,
                                   ["可选 %s" % sorted(SCALE_TYPES)])
-            attempt("y_scale", lambda: setattr(lay, "yscale", y_scale), lambda: lay.yscale, want)
+            attempt("y_scale", lambda: setattr(lay, "yscale", SCALE_NAMES[want]),
+                    lambda: lay.yscale, want)
         if xlim:
             attempt("xlim", lambda: lay.set_xlim(*_pair(xlim)), lambda: lay.xlim)
         if ylim:
@@ -865,16 +975,60 @@ def _pair(v):
     return vals[:3]
 
 
+def _axis_span(lay, which):
+    """(begin, end) of an axis, via the layer's xlim/ylim — axis.from_ is not readable here."""
+    limits = _safe(lambda: getattr(lay, "%slim" % which))
+    try:
+        lo, hi = float(limits[0]), float(limits[1])
+    except (TypeError, ValueError, IndexError):
+        return None, None
+    return (lo, hi) if lo <= hi else (hi, lo)
+
+
+def _line_coords(lay, item):
+    """Reference lines are usually given as one coordinate: x=12 is a vertical line."""
+    if all(k in item for k in ("x1", "y1", "x2", "y2")):
+        return [item[k] for k in ("x1", "y1", "x2", "y2")]
+    has_x, has_y = "x" in item, "y" in item
+    if has_x and not has_y:
+        lo, hi = _axis_span(lay, "y")
+        if lo is None or hi is None:
+            raise OriginError("bad_arguments", "读不到 Y 轴范围，竖参考线请给 x1/y1/x2/y2")
+        return [item["x"], lo, item["x"], hi]
+    if has_y and not has_x:
+        lo, hi = _axis_span(lay, "x")
+        if lo is None or hi is None:
+            raise OriginError("bad_arguments", "读不到 X 轴范围，横参考线请给 x1/y1/x2/y2")
+        return [lo, item["y"], hi, item["y"]]
+    raise OriginError("bad_arguments",
+                      "lines 的每一项要有 x 或 y（单坐标=参考线），或 x1/y1/x2/y2（线段）：收到 %r" % (item,),
+                      ['竖线 {"x": 12}，横线 {"y": 50}，任意线段 {"x1":0,"y1":0,"x2":1,"y2":2}'])
+
+
 def annotate(graph, labels=(), lines=(), layer=0):
     """Text labels and reference lines in data coordinates."""
     if not labels and not lines:
         raise OriginError("bad_arguments", "labels 和 lines 至少给一个")
+    for name, items in (("labels", labels or ()), ("lines", lines or ())):
+        if isinstance(items, str) or not isinstance(items, (list, tuple)):
+            raise OriginError("bad_arguments", "%s 要是列表，收到 %r" % (name, type(items).__name__))
+        for item in items:
+            if not isinstance(item, dict):
+                raise OriginError("bad_arguments",
+                                  "%s 的每一项要是对象，如 {\"text\":..,\"x\":..,\"y\":..}；收到 %r"
+                                  % (name, item),
+                                  ["labels: [{\"text\":\"峰值\",\"x\":1.2,\"y\":30}]"])
 
     def run():
         gr = _graph_of(origin(), graph)
         if gr is None:
             raise OriginError("graph_not_found", "图页句柄无效：%s" % graph)
-        lay = gr[layer]
+        try:
+            lay = gr[layer]
+        except Exception:
+            raise OriginError("bad_layer", "图页 %s 没有第 %d 层（共 %d 层）"
+                              % (_safe(lambda: gr.name, "?"), layer, _layer_count(gr)),
+                              ["先用 origin_inspect 看层数"])
         done = []
         for item in labels or ():
             text = str(item.get("text", ""))
@@ -882,8 +1036,8 @@ def annotate(graph, labels=(), lines=(), layer=0):
             lab = _safe(lambda: lay.add_label(text, x, y))
             done.append({"kind": "label", "text": text, "at": [x, y], "ok": lab is not None})
         for item in lines or ():
-            coords = [item.get(k) for k in ("x1", "y1", "x2", "y2")]
-            ln = _safe(lambda: lay.add_line(*coords))
+            coords = _line_coords(lay, item)
+            ln = _safe(lambda c=coords: lay.add_line(*c))
             done.append({"kind": "line", "coords": coords, "ok": ln is not None,
                          "width": _safe(lambda: ln.width) if ln is not None else None,
                          "type": _safe(lambda: ln.type) if ln is not None else None})
@@ -1061,7 +1215,8 @@ def view(graph, width=900):
     return call(run)
 
 
-LABTALK_DENY = ("doc -s", "doc -c", "saveas", "quit", "exitloop", "type -m", "openb", "run.x")
+LABTALK_DENY = ("doc -s", "doc -c", "saveas", "quit", "exitloop", "type -m", "openb", "run.x",
+                "close;", "close ", "system ", "shell ", "run.section", "run.open", "fopen")
 
 
 def labtalk(script, readback=(), numeric=()):
@@ -1149,7 +1304,14 @@ def fit(worksheet, x=1, y=2, kind="linear", func="", fixed=None, starts=None,
     ws = _resolve("ws", worksheet)
     if ws is None:
         raise OriginError("worksheet_not_found", "工作表句柄无效：%s" % worksheet)
-    kind = str(kind).lower()
+    kind = str(kind or "").lower()
+    switched = False
+    if func and kind in ("", "linear"):
+        # Naming a fitting function means a nonlinear fit: running the linear one
+        # anyway returned slope/intercept for a caller who asked for Gauss.
+        kind, switched = "nlfitsing", True
+    if not kind:
+        kind = "linear"
     if kind in FIT_PRESETS:
         func, kind = FIT_PRESETS[kind], "nlfitsing"
     if kind not in ("linear", "nlfitsing", "nlfit"):
@@ -1182,9 +1344,11 @@ def fit(worksheet, x=1, y=2, kind="linear", func="", fixed=None, starts=None,
         try:
             nl = op.NLFit(func)
         except Exception as exc:
-            raise OriginError("fit_function_unavailable", "函数 %r 不可用：%s" % (func, exc),
-                              ["NLFit 需要 OriginPro 授权",
-                               "本机实测可用的名字：%s" % ", ".join(sorted(set(FIT_PRESETS.values())))])
+            raise OriginError("fit_function_unavailable",
+                              "函数 %r 不是 Origin 里已定义的拟合函数：%s" % (func, exc),
+                              ["func 只能是 Origin 内置函数名，自定义表达式（如 a*exp(-b*x)+c）不支持",
+                               "本机实测可用的预设：%s" % ", ".join(sorted(set(FIT_PRESETS))),
+                               "NLFit 需要 OriginPro 授权"])
         nl.set_data(ws, xi, yi)
         notes = []
         for name, val in (starts or {}).items():
@@ -1208,6 +1372,8 @@ def fit(worksheet, x=1, y=2, kind="linear", func="", fixed=None, starts=None,
         return sanitize({"kind": "nlfitsing", "func": func, "r_squared": r2,
                          "fit_status": res.get("fitstatus") if isinstance(res, dict) else None,
                          "constraints": notes, "trimmed": not full,
+                         **({"note": "你给了 func，所以按非线性拟合执行（kind 省略时默认 linear）"}
+                            if switched else {}),
                          **({"result": body} if full else {"fit": body})})
 
     return call(run, timeout=300)
@@ -1215,8 +1381,11 @@ def fit(worksheet, x=1, y=2, kind="linear", func="", fixed=None, starts=None,
 
 def export(graph, path="", fmt="png", width=1600):
     fmt = str(fmt).lstrip(".").lower()
-    if fmt not in ("png", "tif", "tiff", "svg", "pdf", "emf"):
-        raise OriginError("bad_format", "fmt 只支持 png/tif/svg/pdf/emf，收到 %s" % fmt)
+    # Origin's export filter only recognises the short names: asking for a.tiff
+    # leaves no file behind, which reads as a failed export.
+    fmt = {"tiff": "tif", "jpeg": "jpg"}.get(fmt, fmt)
+    if fmt not in ("png", "tif", "jpg", "svg", "pdf", "emf"):
+        raise OriginError("bad_format", "fmt 只支持 png/tif/jpg/svg/pdf/emf，收到 %s" % fmt)
 
     def run():
         op = origin()
@@ -1225,6 +1394,8 @@ def export(graph, path="", fmt="png", width=1600):
             raise OriginError("graph_not_found", "找不到图页：%s（项目里可能还没有图）" % (graph or ""))
         name = _safe(lambda: page.name, "Graph1")
         target_path = os.path.abspath(path or os.path.join(os.getcwd(), "%s.%s" % (name, fmt)))
+        if os.path.splitext(target_path)[1].lower().lstrip(".") != fmt:
+            target_path = os.path.splitext(target_path)[0] + "." + fmt
         os.makedirs(os.path.dirname(target_path) or ".", exist_ok=True)
         _safe(lambda: page.save_fig(target_path))
         if not os.path.isfile(target_path):
@@ -1274,13 +1445,18 @@ def _save_project(path=""):
             raise OriginError("save_failed", "保存工程失败：%s (ok=%s)" % (target, ok),
                               ["该文件可能正被 Origin 占用（工程绑定后会加锁）",
                                "换一个不冲突的文件名，或省略 path 用自动时间戳命名"])
-        info = _verify_file(target, must_be_image=False)
+        info = _verify_file(target, must_be_image=False, min_bytes=256)
         if not info["ok"]:
-            raise OriginError("save_suspect", "工程文件过小：%s" % info,
+            raise OriginError("save_suspect", "工程文件异常：%s" % info,
                               ["项目里得先有工作表或图页再保存"])
+        pages_now = len(list(_safe(lambda: op.pages(), []) or []))
         _project_file = target
-        out = dict(info, editable=True, saved=bool(ok),
+        out = dict(info, editable=True, saved=bool(ok), pages=pages_now,
                    note="可在 Origin 里继续编辑的 .opju，不是图片快照")
+        if not pages_now:
+            # An empty project really is a few hundred bytes: calling that
+            # "文件过小" was a false alarm on origin_exit(save_to=...).
+            out["warnings"] = ["工程里一个页面都没有，存下来的 .opju 打开是空的"]
         if same_file and not ok:
             out["unchanged"] = True
             out["note"] = "项目已绑定在该文件上且无待写变更，文件保持原样"
@@ -1318,6 +1494,11 @@ def inspect(graph=""):
                   "lname": _safe(lambda p=p: p.lname, "")} for p in op.pages()]
         out = {"pages": pages, "handles": sorted(_handles)}
         page = _graph_of(op, graph)
+        if page is None and str(graph or "").strip():
+            # A handle that no longer exists must not degrade into "here are the
+            # other pages", which reads as a successful inspection of nothing.
+            raise OriginError("graph_not_found", "图页句柄无效或已关闭：%s" % graph,
+                              ["origin_inspect 不带 graph 先看页面清单", "或重新 origin_plot 拿句柄"])
         if page is not None:
             layers = []
             i = 0
@@ -1345,7 +1526,7 @@ def exit_origin(save_to=""):
         _handles.clear()
         _names.clear()
         _project_file = ""
-        _op = None
+        _reset_connection()
         return sanitize({"exited": True, "saved": saved})
 
     return call(run)
@@ -1590,10 +1771,13 @@ def _catalog():
 
 def chart_presets(category=""):
     cat = _catalog()
-    items = cat.list_templates(category or None)
-    return sanitize({"n_templates": len(items),
-                     "categories": sorted({t["category"] for t in cat.TEMPLATES}),
-                     "templates": items})
+    known = sorted({t["category"] for t in cat.TEMPLATES})
+    want = str(category or "").strip().lower()
+    if want and want not in {c.lower() for c in known}:
+        raise OriginError("bad_category", "没有这个图表预设分类：%r" % category,
+                          ["可用分类：%s" % ", ".join(known)])
+    items = cat.list_templates(want or None)
+    return sanitize({"n_templates": len(items), "categories": known, "templates": items})
 
 
 def chart_preset(name):
@@ -1612,7 +1796,26 @@ def chart_check(name, data=None, columns=None):
     if tpl is None:
         raise OriginError("preset_not_found", "没有这个图表预设：%r" % name)
     if data and not columns:
-        columns = [c["name"] for c in read_file(data)["columns"]]
+        # `data` is documented as a file path, but models hand us dicts and lists
+        # here constantly; accept those as column sources instead of dying with a
+        # raw TypeError, and say so when the value is neither.
+        if isinstance(data, dict):
+            columns = list(data)
+        elif isinstance(data, (list, tuple)):
+            columns = [str(c) for c in data]
+        elif isinstance(data, str):
+            try:
+                parsed = read_file(data)
+            except OriginError:
+                raise
+            except Exception as exc:
+                raise OriginError("bad_arguments",
+                                  "data 要的是数据文件路径，或者列名列表/字典：%s" % exc,
+                                  ["origin_chart_check 传 columns=[...] 更直接"]) from exc
+            columns = [c["name"] for c in parsed["columns"]]
+        else:
+            raise OriginError("bad_arguments", "data 只能是文件路径字符串、列名字典或列表",
+                              ["origin_chart_check 传 columns=[...] 更直接"])
     detected = list(columns or [])
     issues = []
     for req in tpl["required_columns"] or ():
@@ -1639,6 +1842,15 @@ def chart_render(name, source="", columns=None, x=1, y=2, output_dir="",
     throw away whatever project the user has open in Origin.
     """
     checked = chart_check(name, data=source) if not columns else chart_check(name, columns=columns)
+    if checked["issues"]:
+        # Drawing a preset over data that does not carry its columns produced a
+        # chart with the wrong axis labels and no hint anything was off.
+        raise OriginError("preset_columns_mismatch",
+                          "%s 预设的列对不上：%s（识别到的列：%s）"
+                          % (name, "；".join(checked["issues"]), checked["columns_detected"] or "无"),
+                          ["把数据列名改成预设要求的名字（见 required_columns）",
+                           "换一个匹配数据的预设：origin_chart_presets",
+                           "不套预设只是画图：用 origin_figure"])
     preset = chart_preset(name)
     kind = str(plot_type or preset.get("default_plot_kind") or "line").lower()
     if kind not in PLOT_CODES:
