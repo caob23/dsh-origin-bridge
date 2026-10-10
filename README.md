@@ -51,6 +51,50 @@
 
 要求：Windows、Origin/OriginPro **2021 或更高**（`originpro` 的硬性下限，实测 2018 不可用）、Python 3.10+。
 
+### 方式 A：用 `dsh plugin` 从 npm 装（推荐）
+
+```bash
+dsh plugin --profile desktop add dsh-origin-bridge
+```
+
+两个包名指向同一个包，装哪个都行：
+
+```bash
+dsh plugin --profile desktop add dsh-origin-bridge          # 正式包
+dsh plugin --profile desktop add @caob23/dsh-origin-bridge  # 转发壳，依赖上面那个
+```
+
+本包是 bundle 包（`package.json` 的 `dsh.bundle.patch` 指向根目录的 `cordis.patch.yml`），`dsh plugin` 装完会自动把它加进 profile 的 `dsh.profile.bundles`，**重启 dsh 即加载**，不用再手写补丁。`dsh plugin` 转发给 pnpm，所以 pnpm 要在 PATH 上。
+
+**npm 只管分发，不管你的 Python 环境**——Origin 依赖必须自己装进 dsh 实际使用的那个解释器：
+
+```powershell
+pip install originpro numpy        # 国内网络慢就加 -i https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+包内补丁的默认取值是 `python`（PATH 上那个）和 `profiles/desktop`。依赖装在 venv 里、或者你用的是别的 profile，就设这两个用户环境变量（设完要重开终端、再彻底重启 dsh）：
+
+```powershell
+setx ORIGIN_BRIDGE_PYTHON "C:\path\to\.venv\Scripts\python.exe"
+setx ORIGIN_BRIDGE_HOME   "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-origin-bridge"
+```
+
+装完自检（路径按你的 profile 名改）：
+
+```powershell
+Test-Path "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\dsh-origin-bridge\server.py"
+```
+
+彻底退出 dsh 再打开，新会话里说"列出 origin 开头的工具"，应看到 25 个 `mcp__origin_bridge__origin_*`。卸载：
+
+```bash
+dsh plugin --profile desktop remove dsh-origin-bridge
+```
+
+> `failOnStartupError: false` 是刻意的：Origin 没开或有模态框卡住 COM 时，只让工具这一轮不注册，不把 dsh 一起拖崩。
+
+### 方式 B：本地 clone（要跑测试或改代码时）
+
 ```powershell
 cd C:\path\to\dsh-origin-bridge
 python -m venv .venv
@@ -67,7 +111,23 @@ pip install -r requirements.txt      # 国内网络慢就加 -i https://pypi.tun
 .\.venv\Scripts\python.exe test_binio.py     # 24 项起，不需要 Origin；有真实 .bin 时会跟厂商 .txt 逐点对账
 ```
 
-## 挂进 dsh
+### 不是 dsh，是别的 MCP 客户端
+
+npm 装完会生成 `origin-bridge` 这个可执行入口（`bin/origin-bridge.mjs`），stdio 直连，配置里把 `command` 指向它或指向 `node_modules/dsh-origin-bridge/bin/origin-bridge.mjs`，`serverName` 保持 `origin_bridge` 即可，工具名仍是 `mcp__origin_bridge__origin_*`。
+
+
+先确认能独立跑通（会自己拉起 Origin）：
+
+```powershell
+.\.venv\Scripts\python.exe smoke_test.py     # 97 项，看到 ALL GOOD 才算过
+.\.venv\Scripts\python.exe edge_checks.py    # 25 项边界
+.\.venv\Scripts\python.exe test_asciiio.py   # 24 项，不需要 Origin
+.\.venv\Scripts\python.exe test_binio.py     # 24 项起，不需要 Origin；有真实 .bin 时会跟厂商 .txt 逐点对账
+```
+
+## 挂进 dsh（只针对方式 B）
+
+走方式 A 的话这一段可以整个跳过——`dsh plugin` 已经替你写好了。下面是本地 clone 时的两种接法。
 
 自动（推荐，会先备份再写入）：
 
@@ -102,7 +162,7 @@ powershell -ExecutionPolicy Bypass -File .\install_dsh.ps1 -Profile desktop
 >
 > `failOnStartupError: false` 别省：Origin 没装或卡在弹窗时，它保证 dsh 照常启动，只是那一次不注册工具。
 
-装成市场插件（可选）：把整个目录放进 `<DSH_HOME>\profiles\desktop\node_modules\dsh-origin-bridge\`，仓库自带的 `cordis.patch.yml` 就是 bundle 层补丁；也可以用环境变量 `ORIGIN_BRIDGE_HOME` / `ORIGIN_BRIDGE_PYTHON` 覆盖路径。卡片图标与显示名来自 `icon.svg` 和 `locale/*.json`。
+不想用 `install_dsh.ps1` 也不用 npm 的话，可以把整个目录拷进 `<DSH_HOME>\profiles\<profile>\node_modules\dsh-origin-bridge\`，仓库自带的 `cordis.patch.yml` 就是 bundle 层补丁——但这只是方式 A 的手动等价物，路径与解释器仍靠 `ORIGIN_BRIDGE_HOME` / `ORIGIN_BRIDGE_PYTHON` 指定，正常情况请直接走方式 A。卡片图标与显示名来自 `icon.svg` 和 `locale/en.json`、`locale/zh.json`。
 
 ## 工具（25 个）
 
