@@ -13,12 +13,17 @@ import sys
 import threading
 import time
 
+import originlab  # only for the instance-table cleanup at the end; no COM until called
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "out")
 # Point this at the installed copy (…/node_modules/dsh-origin-bridge/server.py)
 # to regression-test what dsh actually runs, without littering that folder.
 SERVER = os.environ.get("ORIGIN_BRIDGE_SERVER") or os.path.join(HERE, "server.py")
 PY = sys.executable
+# ISO-8601 local timestamp of this run, used to tell our own leftover Origin
+# instances from a session that was already open.
+STARTED_AT = time.strftime("%Y-%m-%dT%H:%M:%S")
 
 
 class Rpc:
@@ -112,11 +117,16 @@ def main():
 
     tools = rpc.request("tools/list").get("result", {}).get("tools", [])
     names = sorted(t["name"] for t in tools)
-    check("tools/list returns 25", len(tools) == 25, len(tools))
+    check("tools/list returns 27", len(tools) == 27, len(tools))
+    check("实例治理工具已暴露", {"origin_instances", "origin_reclaim"} <= set(names),
+          [n for n in names if "instance" in n or "reclaim" in n])
+    # Tools that genuinely take no arguments are the only ones allowed an empty
+    # properties block; everything else must describe its inputs.
+    no_arg = {"origin_status", "origin_instances"}
     for t in tools:
-        check("schema present: %s" % t["name"], bool(t.get("inputSchema", {}).get("properties")
-                                                     or t["name"] in ("origin_status",)),
-              len(t.get("inputSchema", {}).get("properties", {})))
+        props = t.get("inputSchema", {}).get("properties") or {}
+        check("schema present: %s" % t["name"], bool(props) or t["name"] in no_arg, len(props))
+        check("无参工具确实无参: %s" % t["name"], t["name"] not in no_arg or not props, sorted(props))
     print("       %s" % ", ".join(names))
 
     # origin_read_file is pure Python, so it is checked in both modes.
@@ -409,6 +419,18 @@ def main():
     still = proto.tool("origin_status", {}, timeout=120)
     check("tools still work after abuse", still.get("connected") is True, still.get("code"))
     proto.close()
+
+    # The child server processes this suite drives can be terminated instead of
+    # exiting cleanly, which leaves their Origin instance running. Reclaim only
+    # windowless instances that started after this run: an older one may belong
+    # to a live dsh session.
+    late = [r for r in originlab._process_rows()
+            if not r["window"] and str(r.get("started") or "") >= STARTED_AT]
+    for row in late:
+        originlab._close_pid(row["pid"])
+    left = [r for r in originlab._process_rows()
+            if not r["window"] and str(r.get("started") or "") >= STARTED_AT]
+    check("run leaves no Origin instance of its own", not left, left)
 
     print("\nartifacts:")
     for f in sorted(os.listdir(OUT)):

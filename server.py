@@ -275,6 +275,21 @@ TOOLS = [
         "run": lambda a: originlab.exit_origin(a.get("save_to", "")),
     },
     {
+        "name": "origin_instances",
+        "description": "清点机器上的 Origin 实例：分「后台无窗口」（客户端退出后残留，会占配额）和「前台有窗口」（可能是用户自己开着的项目）。Origin 实例数超上限、或报 connection_error 时先调这个看情况。",
+        "inputSchema": {"type": "object", "properties": {}},
+        "run": lambda a: originlab.instances(),
+    },
+    {
+        "name": "origin_reclaim",
+        "description": "回收残留的 Origin 实例：只关**没有窗口**的后台实例；有窗口的一律不动，只在返回里告诉你哪几个需要用户自己关。close_background=false 时只看不动手。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"close_background": {"type": "boolean", "default": True}},
+        },
+        "run": lambda a: originlab.reclaim(bool(a.get("close_background", True))),
+    },
+    {
         "name": "origin_annotate",
         "description": "在图上加文字标注和参考线（数据坐标系）。比如标峰位、画阈值线。标注没有值可读回，返回 readback_only，要确证用 origin_view 看图。",
         "inputSchema": {

@@ -12,15 +12,15 @@
 
 <p align="center">
   <a href="#安装"><img alt="platform" src="https://img.shields.io/badge/platform-Windows%20%2B%20Origin%202021%2B-blue"></a>
-  <img alt="tests" src="https://img.shields.io/badge/tests-170%2B%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-224%2B%20passing-brightgreen">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-lightgrey">
 </p>
 
 <p align="center">
-  <img src="docs/preview.png" width="640" alt="两条曲线、图例、轴标题齐全的 Origin 成图">
+  <img src="docs/preview.png" width="640" alt="两条曲线、轴标题齐全的 Origin 成图">
 </p>
 
-> 上图由测试套件自动生成：一次 `origin_figure` 调用完成 导入 → 画图 → 配色 → 图例 → 导出 PNG + 保存 .opju。
+> 上图由 `scripts/make_preview.py` 生成：导入 → 画两条曲线 → 配色与符号 → 关掉图例 → 导出 PNG，全部走本插件自己的引擎调用，轴标题与图例可见性都读回校验后才导出。数据是 `sample.dat` 的合成序列，不含任何真实实验数据。
 
 ---
 
@@ -30,8 +30,8 @@
 
 - **数据不出本机。** 没有 API key、没有云端组件，dsh 拉起一个本地 Python 进程，通过 OriginLab 官方的 [`originpro`](https://pypi.org/project/originpro/) 驱动你机器上的 Origin。
 - **每一步都有证据。** Origin 的 X-Function 普遍"返回成功但什么都没发生"。这里画图后读回轴范围与数据跨度比对，导出后校验文件存在/体积/文件头魔数，样式逐项读回——读不回的进 `failed` 列表，不会假装成功。
-- **不是 74 个工具，是 25 个。** 每个都有实测用途，工具描述里写着实测限制，模型不会踩坑。
-- **不是玩具。** 170–176 项自动化测试（本机带真实工作站 .bin 样本时 176）覆盖协议滥用、边界条件、坏句柄、真实数据文件；originpro 的十几个文档陷阱全部记录在案并绕开。
+- **不是 74 个工具，是 27 个。** 每个都有实测用途，工具描述里写着实测限制，模型不会踩坑。
+- **不是玩具。** 224–230 项自动化测试（本机带真实工作站 .bin 样本时 230）覆盖协议滥用、边界条件、坏句柄、真实数据文件；originpro 的十几个文档陷阱全部记录在案并绕开。
 
 ## 它能做什么
 
@@ -85,7 +85,7 @@ setx ORIGIN_BRIDGE_HOME   "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-o
 Test-Path "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\dsh-origin-bridge\server.py"
 ```
 
-彻底退出 dsh 再打开，新会话里说"列出 origin 开头的工具"，应看到 25 个 `mcp__origin_bridge__origin_*`。卸载：
+彻底退出 dsh 再打开，新会话里说"列出 origin 开头的工具"，应看到 27 个 `mcp__origin_bridge__origin_*`。卸载：
 
 ```bash
 dsh plugin --profile desktop remove dsh-origin-bridge
@@ -106,24 +106,15 @@ pip install -r requirements.txt      # 国内网络慢就加 -i https://pypi.tun
 
 ```powershell
 .\.venv\Scripts\python.exe smoke_test.py     # 97 项，看到 ALL GOOD 才算过
-.\.venv\Scripts\python.exe edge_checks.py    # 25 项边界
+.\.venv\Scripts\python.exe edge_checks.py    # 26 项边界
 .\.venv\Scripts\python.exe test_asciiio.py   # 24 项，不需要 Origin
 .\.venv\Scripts\python.exe test_binio.py     # 24 项起，不需要 Origin；有真实 .bin 时会跟厂商 .txt 逐点对账
+.\.venv\Scripts\python.exe test_lifecycle.py # 20 项，不需要 Origin：实例分类/回收的安全边界
 ```
 
 ### 不是 dsh，是别的 MCP 客户端
 
 npm 装完会生成 `origin-bridge` 这个可执行入口（`bin/origin-bridge.mjs`），stdio 直连，配置里把 `command` 指向它或指向 `node_modules/dsh-origin-bridge/bin/origin-bridge.mjs`，`serverName` 保持 `origin_bridge` 即可，工具名仍是 `mcp__origin_bridge__origin_*`。
-
-
-先确认能独立跑通（会自己拉起 Origin）：
-
-```powershell
-.\.venv\Scripts\python.exe smoke_test.py     # 97 项，看到 ALL GOOD 才算过
-.\.venv\Scripts\python.exe edge_checks.py    # 25 项边界
-.\.venv\Scripts\python.exe test_asciiio.py   # 24 项，不需要 Origin
-.\.venv\Scripts\python.exe test_binio.py     # 24 项起，不需要 Origin；有真实 .bin 时会跟厂商 .txt 逐点对账
-```
 
 ## 挂进 dsh（只针对方式 B）
 
@@ -153,7 +144,7 @@ powershell -ExecutionPolicy Bypass -File .\install_dsh.ps1 -Profile desktop
         toolCallTimeoutMs: 180000
 ```
 
-然后**彻底退出 dsh 再打开**（配置只在启动时读一次）。新会话里说"列出 origin 开头的工具"应能看到 25 个 `mcp__origin_bridge__origin_*`。
+然后**彻底退出 dsh 再打开**（配置只在启动时读一次）。新会话里说"列出 origin 开头的工具"应能看到 27 个 `mcp__origin_bridge__origin_*`。
 
 > 三个必须对的点，都是踩过的坑：
 > 1. **必须以 `- insert:` 开头。** 直接写 `- id: 新名字` 是"覆盖下层已存在条目"的语法，对全新 id 会被 dsh **静默忽略**——症状就是改了配置、重启了、什么都没发生。
@@ -164,7 +155,7 @@ powershell -ExecutionPolicy Bypass -File .\install_dsh.ps1 -Profile desktop
 
 不想用 `install_dsh.ps1` 也不用 npm 的话，可以把整个目录拷进 `<DSH_HOME>\profiles\<profile>\node_modules\dsh-origin-bridge\`，仓库自带的 `cordis.patch.yml` 就是 bundle 层补丁——但这只是方式 A 的手动等价物，路径与解释器仍靠 `ORIGIN_BRIDGE_HOME` / `ORIGIN_BRIDGE_PYTHON` 指定，正常情况请直接走方式 A。卡片图标与显示名来自 `icon.svg` 和 `locale/en.json`、`locale/zh.json`。
 
-## 工具（25 个）
+## 工具（27 个）
 
 | 工具 | 用途 |
 |---|---|
@@ -192,6 +183,8 @@ powershell -ExecutionPolicy Bypass -File .\install_dsh.ps1 -Profile desktop
 | `origin_close_pages` | 清理攒下来的页面（长会话里这是"无效指针"的根因），支持 dry_run |
 | `origin_labtalk` | 逃生舱：原始 LabTalk + 强制读回 |
 | `origin_exit` | 关 Origin，可选先存盘 |
+| `origin_instances` | 清点机器上的 Origin 实例：后台无窗口（客户端退出后的残留）vs 前台有窗口（可能是用户自己的项目），并标出哪些是本进程起的 |
+| `origin_reclaim` | 回收残留实例：**只关没有窗口的**；有窗口的一律不动，只在返回里提示用户自己关。`close_background:false` 只看不动手 |
 | `origin_figure` | 主路径：导入→画图→轴标题→图例→图片+opju 一次完成 |
 
 ## 工作站 `.bin` 是怎么回事
@@ -253,6 +246,7 @@ Origin Bridge 的做法：
 - 中文/网盘路径导出历史上不稳，导出建议 ASCII 本地路径。
 - Origin 以管理员运行而 Python 不是（或反之）时 COM 连不上，两侧权限要一致。
 - 长会话攒太多页面会让 COM 桥报"无效指针"。`origin_close_pages` 能清，根治是 `origin_exit` 后重连。
+- **Origin 实例不会跟着客户端退出**：originpro 需要时自己拉一个 Origin，Python 进程结束那个实例还在。攒够就会报"实例超过上限"。现在插件在进程退出时回收**自己起的、且没有窗口的**实例（`atexit`），历史残留用 `origin_reclaim` 清；有窗口的实例永远不动，因为那可能是你正开着的项目。
 - 统计批处理（t 检验 / ANOVA / PCA / 生存分析）没有，originpro 本身也不提供。
 - **无并发保护**：两个会话同时驱动 Origin 会互相踩。
 - 40 个图表预设只取元数据；预设自带的 `render_template()` 会先 `op.new()`——那会把用户正在编辑的工程整个丢掉，所以这里换成自己的渲染路径。
@@ -261,8 +255,9 @@ Origin Bridge 的做法：
 
 | 现象 | 先查 |
 |---|---|
-| dsh 里看不到工具 | 配置是不是漏了 `- insert:`；`name:` 有没有写成 `@deepseek-ai/dsh-mcp-client`；有没有彻底退出重启 dsh；`python server.py --tools` 能否列出 25 个 |
+| dsh 里看不到工具 | 配置是不是漏了 `- insert:`；`name:` 有没有写成 `@deepseek-ai/dsh-mcp-client`；有没有彻底退出重启 dsh；`python server.py --tools` 能否列出 27 个 |
 | `connection_error` | Origin 是否 ≥2021；`pip show originpro`；任务管理器里 `Origin64.exe` 是否只有一个 |
+| 报"实例超过上限" | `origin_instances` 看有几个、哪些没窗口；`origin_reclaim` 关残留的后台实例；有窗口的那些要用户自己关（可能有未保存的东西） |
 | `import_empty` | 先 `origin_read_file` 看结构；空格/多行表头已由自研解析器处理，走到这个报错说明文件本身没有数值行 |
 | `com_timeout` | Origin 窗口是否卡在对话框/许可证弹窗 |
 | `无效指针` | 页面攒太多：`origin_close_pages`，或 `origin_exit` 让它重开 |
@@ -273,7 +268,7 @@ Origin Bridge 的做法：
 
 ```
 dsh-origin-bridge/
-├── server.py            # 同步 stdio JSON-RPC，25 个工具的分发与 schema
+├── server.py            # 同步 stdio JSON-RPC，27 个工具的分发与 schema
 ├── originlab.py         # 引擎：COM 专用线程、句柄表、每个操作及其读回验证
 ├── asciiio.py           # 健壮的 ASCII 读取（分隔符嗅探 / GBK / 多行表头）
 ├── binio.py             # 工作站 .bin：单测量通道 + 方法参数重建电势轴
@@ -282,7 +277,8 @@ dsh-origin-bridge/
 ├── install_dsh.ps1      # 一键装入 dsh（备份 + 写 profile 层 + 自检）
 ├── icon.svg             # 卡片图标（scripts/make_icon.py 生成）
 ├── locale/*.json        # dsh 卡片显示名与描述
-└── *_test.py / smoke_test.py / edge_checks.py   # 170–176 项测试
+├── scripts/make_preview.py # 重新生成 docs/preview.png（关掉图例后才导出）
+└── test_*.py / smoke_test.py / edge_checks.py   # 224–230 项测试
 ```
 
 重新生成图标：`python scripts/make_icon.py`（只需要 numpy，PNG 由 stdlib 手写）。

@@ -173,6 +173,16 @@ def main():
         print("SKIP  node launcher (node not on PATH)")
 
     bad = [n for n, ok in results if not ok]
+    # Same teardown as smoke_test: reclaim only the windowless instances this run
+    # started; an older one may belong to a live dsh session.
+    late = [r for r in S.originlab._process_rows()
+            if not r["window"] and str(r.get("started") or "") >= S.STARTED_AT]
+    for row in late:
+        S.originlab._close_pid(row["pid"])
+    left = [r for r in S.originlab._process_rows()
+            if not r["window"] and str(r.get("started") or "") >= S.STARTED_AT]
+    check("run leaves no Origin instance", not left, left)
+
     print("\n%d/%d passed" % (len(results) - len(bad), len(results)))
     if bad:
         print("FAILED:", ", ".join(bad))

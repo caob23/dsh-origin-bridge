@@ -9,10 +9,13 @@ by a registry, because parsing Origin's own [Book]Sheet! range strings back and
 forth is the most common source of silent failures.
 """
 
+import atexit
+import math
 import os
 import queue
 import re
 import struct
+import subprocess
 import sys
 import threading
 import time
@@ -119,6 +122,10 @@ def origin():
     except ImportError as exc:
         raise OriginError("missing_originpro", "这个 Python 环境里没有 originpro：%s" % exc,
                           ["pip install originpro"])
+    # Record who was already running: anything that appears after we connect was
+    # started by us, and anything windowless that predates us is an orphan left by
+    # a client that exited without releasing its Origin.
+    before = _process_rows()
     try:
         op.path()
     except Exception as exc:
@@ -128,10 +135,128 @@ def origin():
             ["确认装了 Origin/OriginPro 2021 或更高（originpro 的硬性下限）",
              "确认 Origin 与 Python 都是 64 位",
              "若任务管理器里有多个 Origin64.exe，只保留一个",
-             "长会话攒页面后桥会坏：先 origin_exit 让插件重启 Origin"],
+             "长会话攒页面后桥会坏：先 origin_exit 让插件重启 Origin",
+             "实例数到上限时：origin_reclaim 会关掉没有窗口的残留实例"],
         )
+    existing = {row["pid"] for row in before}
+    _started_pids.update(row["pid"] for row in _process_rows() if row["pid"] not in existing)
+    _orphan_pids.update(row["pid"] for row in before if not row["window"])
     _op = op
     return op
+
+
+# ------------------------------------------------------- instance lifecycle
+
+ORIGIN_EXE = "Origin64.exe"
+_started_pids = set()   # instances that appeared because WE connected
+_orphan_pids = set()    # background instances seen before we connected
+
+
+def _process_rows():
+    """List Origin64 processes as {pid, started, window}.
+
+    MainWindowHandle is what separates an instance the human can see from an
+    orphan a departing client left behind: originpro launches Origin on demand
+    and Origin does not quit when its client process exits.
+    """
+    if os.name != "nt":
+        return []
+    script = ("Get-Process Origin64 -ErrorAction SilentlyContinue | ForEach-Object {"
+              "\"$($_.Id)|\" + $(try { $_.StartTime.ToString('o') } catch { '' }) + "
+              "\"|$($_.MainWindowHandle)\"}")
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", script],
+                             capture_output=True, text=True, timeout=25).stdout
+    except Exception:
+        return []
+    rows = []
+    for line in out.splitlines():
+        parts = line.strip().split("|")
+        if len(parts) != 3:
+            continue
+        try:
+            rows.append({"pid": int(parts[0]), "started": parts[1], "window": int(parts[2] or 0)})
+        except ValueError:
+            continue
+    return rows
+
+
+def _terminate(pid, force=False):
+    args = ["taskkill"] + (["/F"] if force else []) + ["/PID", str(pid)]
+    return subprocess.run(args, capture_output=True, text=True, timeout=30)
+
+
+def _close_pid(pid):
+    """Ask for a polite exit first; escalate to a forced kill only if it survives."""
+    _terminate(pid)
+    for _ in range(6):
+        time.sleep(0.5)
+        if pid not in {row["pid"] for row in _process_rows()}:
+            return "closed"
+    _terminate(pid, force=True)
+    return "force_closed"
+
+
+def instances():
+    """Report every Origin instance: background (reclaimable) vs foreground (the user's)."""
+    rows = _process_rows()
+    for row in rows:
+        row["foreground"] = bool(row["window"])
+        row["ours"] = row["pid"] in _started_pids
+    return sanitize({"count": len(rows),
+                     "background": [r for r in rows if not r["foreground"]],
+                     "foreground": [r for r in rows if r["foreground"]],
+                     "started_by_us": sorted(_started_pids)})
+
+
+def reclaim(close_background=True):
+    """Close windowless Origin instances; a visible window is reported, never killed.
+
+    An instance with no window has no client and no human in front of it. One with
+    a window may be the user's own unsaved work, so it is listed for them to close.
+    """
+    rows = _process_rows()
+    back = [r for r in rows if not r["window"]]
+    front = [r for r in rows if r["window"]]
+    result = {"closed": [], "force_closed": [], "left_running": [r["pid"] for r in front],
+              "notify": ""}
+    if not close_background:
+        result["skipped"] = [r["pid"] for r in back]
+        return sanitize(result)
+
+    for row in back:
+        pid = row["pid"]
+        try:
+            outcome = _close_pid(pid)
+        except Exception as exc:
+            result["left_running"].append(pid)
+            result["notify"] += "PID %s 关不掉：%s；" % (pid, exc)
+            continue
+        result[outcome].append(pid)
+
+    if front:
+        result["notify"] += ("检测到 %d 个**有窗口**的 Origin 实例，没有动它们（可能是你自己开着的项目，"
+                            "含未保存工作）。要释放实例配额请自己关掉这些窗口，"
+                            "或先 origin_save_project 保存。") % len(front)
+    if not result["notify"]:
+        result["notify"] = "已回收全部后台实例，没有发现前台窗口。"
+    _started_pids.difference_update(result["closed"] + result["force_closed"])
+    return sanitize(result)
+
+
+def _release_on_exit():
+    """A client that exits must not leave its own Origin instance running."""
+    if not _started_pids:
+        return
+    try:
+        for row in _process_rows():
+            if row["pid"] in _started_pids and not row["window"]:
+                _close_pid(row["pid"])
+    except Exception:
+        pass
+
+
+atexit.register(_release_on_exit)
 
 
 # ---------------------------------------------------------------- handles
@@ -943,7 +1068,15 @@ def labtalk(script, readback=(), numeric=()):
             strs[str(name)] = _safe(lambda n=name: op.get_lt_str(n), None)
         nums = {}
         for name in numeric or ():
-            nums[str(name)] = _safe(lambda n=name: op.lt_float(n), None)
+            def read(n=name):
+                # lt_float returns nan for integer-typed LabTalk variables
+                # (layer.showlegend, Legend.Show), which would make a successful
+                # change look unverifiable.
+                value = op.lt_float(n)
+                if isinstance(value, float) and math.isnan(value):
+                    return op.lt_int(n)
+                return value
+            nums[str(name)] = _safe(read, None)
         return sanitize({"script": str(script), "returned": bool(ret),
                          "readback": strs, "numeric": nums,
                          "proof_level": "verified" if (ret and (strs or nums)) else
